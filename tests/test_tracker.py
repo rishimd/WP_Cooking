@@ -306,3 +306,37 @@ def test_booking_link_only_on_good_days(tmp_path, monkeypatch, capsys):
     assert "Open this search on Google Flights" in out and len(asked) == 1
     assert "Book this exact flight" in day(2, 590)           # under target
     assert len(asked) == 2
+
+
+def test_children_ages_map_to_google_fare_types():
+    from flight_tracker.config import parse_config
+    trip = parse_config({"trips": [{"name": "Fam", "origin": "JFK", "destination": "DEL",
+                                    "depart_dates": "2027-01-10", "adults": 2,
+                                    "children_ages": [13, 7, 4, 1]}]}).trips[0]
+    assert (trip.n_adults, trip.n_children, trip.n_infants) == (3, 2, 1)
+    assert trip.travelers == "3 adults, 2 children (7, 4), 1 infant on lap"
+    p = SerpApiProvider("k").build_params(trip, trip.searches(TODAY)[0], "USD")
+    assert (p["adults"], p["children"], p["infants_on_lap"], p["infants_in_seat"]) == (3, 2, 1, 0)
+
+
+def test_infant_in_own_seat_and_limits():
+    import pytest
+    from flight_tracker.config import parse_config
+    base = {"name": "Fam", "origin": "JFK", "destination": "DEL", "depart_dates": "2027-01-10"}
+    trip = parse_config({"trips": [dict(base, adults=1, children_ages=[0, 1], infants="seat")]}).trips[0]
+    p = SerpApiProvider("k").build_params(trip, trip.searches(TODAY)[0], "USD")
+    assert (p["infants_on_lap"], p["infants_in_seat"]) == (0, 2)
+    assert trip.travelers == "1 adult, 2 infants in own seat"
+    with pytest.raises(ValueError, match="lap infant needs an adult"):
+        parse_config({"trips": [dict(base, adults=1, children_ages=[0, 1])]})
+    with pytest.raises(ValueError, match="at most 9"):
+        parse_config({"trips": [dict(base, adults=4, children_ages=[5, 5, 5, 5, 5, 5])]})
+    with pytest.raises(ValueError, match="between 0 and 17"):
+        parse_config({"trips": [dict(base, children_ages=[18])]})
+
+
+def test_old_children_count_still_works():
+    from flight_tracker.config import parse_config
+    trip = parse_config({"trips": [{"name": "A", "origin": "JFK", "destination": "DEL",
+                                    "depart_dates": "2027-01-10", "adults": 2, "children": 1}]}).trips[0]
+    assert trip.travelers == "2 adults, 1 child"

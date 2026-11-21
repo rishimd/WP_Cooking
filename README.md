@@ -64,6 +64,9 @@ SERPAPI_KEY=... python -m flight_tracker.main --dry-run   # real prices, prints 
 python -m pytest -q
 ```
 
+## Children's ages
+Enter each child's age **on the travel date** (`children_ages: [13, 7, 1]` or "13, 7, 1" on the trip page). Google Flights prices by age: 12 and over pay adult fares, 2 to 11 pay child fares, and under 2 are infants. Babies under 2 can sit on a lap (`infants: lap`, the cheapest, one per adult) or have their own seat (`infants: seat`). The alert lists who is travelling, for example "2 adults, 2 children (7, 4), 1 infant on lap", and the Google Flights links include the same travelers.
+
 ## Booking links
 Every alert links to Google Flights with your route, the cheapest dates, travelers and cabin already filled in, so you don't search again.
 

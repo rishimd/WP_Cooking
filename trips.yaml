@@ -33,7 +33,10 @@ trips:
       - from: BOM
         to: JFK
         dates: "2027-01-28"
-    adults: 1
+    adults: 1                            # travelers 18+ (or any age that pays an adult fare)
+    # children_ages: [7, 1]              # each child's age on the travel date:
+    #                                    # 12-17 pay adult fares, 2-11 child fares, under 2 are infants
+    # infants: lap                       # lap (cheapest) or seat, for children under 2
     cabin: economy                       # economy | premium_economy | business | first
     max_stops: 1                         # 0 = nonstop only, 1, 2, or omit for any
     target_price: 1400                   # get an extra alert when it drops below this
@@ -45,4 +48,4 @@ trips:
   #   depart_dates: "2027-01-10..2027-01-12"
   #   trip_length_days: [14]             # or return_dates: "2027-01-24"
   #   adults: 2
-  #   children: 1
+  #   children_ages: [7, 4]

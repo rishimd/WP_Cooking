@@ -39,7 +39,7 @@ def stops_label(n: int) -> str:
 
 def trip_block(trip: Trip, search: Search, offer: Offer | None, history: History,
                currency: str, errors: list[str]) -> str:
-    title = f"<b>{html.escape(trip.name)}</b>  ({trip.route})"
+    title = f"<b>{html.escape(trip.name)}</b>  ({trip.route})\n👨‍👩‍👧 {trip.travelers}"
     if offer is None:
         reason = "; ".join(errors) if errors else "no flights found for today's dates"
         return f"{title}\n⚠️ {html.escape(reason)}"

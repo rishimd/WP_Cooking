@@ -259,6 +259,8 @@ function toForm(raw) {
     return_from: ret[0] ?? '', return_to: ret.length > 1 ? ret[ret.length - 1] : '',
     length_days: lengths.join(', '),
     adults: raw.adults ?? 1, children: raw.children ?? 0, cabin: raw.cabin ?? 'economy',
+    children_ages: (Array.isArray(raw.children_ages) ? raw.children_ages : raw.children_ages != null ? [raw.children_ages] : []).join(', '),
+    infants: raw.infants === 'seat' ? 'seat' : 'lap',
     max_stops: raw.max_stops == null ? '' : String(raw.max_stops),
     target_price: raw.target_price ?? '',
   };
@@ -269,8 +271,18 @@ const clean = v => String(v ?? '').trim().toUpperCase().replace(/\s+/g, '');
 
 function commonFields(raw, f) {
   raw.adults = Math.max(1, parseInt(f.adults, 10) || 1);
-  const kids = parseInt(f.children, 10) || 0;
+  const kids = parseInt(f.children, 10) || 0;   // older trips saved a count without ages
   if (kids > 0) raw.children = kids;
+  const label = raw.name;
+  const ages = String(f.children_ages ?? '').split(/[,\s]+/).filter(Boolean).map(Number);
+  if (ages.some(a => !Number.isInteger(a) || a < 0 || a > 17))
+    throw new Error(`${label}: children's ages must be whole numbers from 0 to 17, e.g. 7, 4, 1`);
+  if (ages.length) raw.children_ages = ages;
+  const infants = ages.filter(a => a < 2).length, adultFares = raw.adults + ages.filter(a => a >= 12).length;
+  if (infants) raw.infants = f.infants === 'seat' ? 'seat' : 'lap';
+  if (infants && raw.infants === 'lap' && infants > adultFares)
+    throw new Error(`${label}: each baby on a lap needs an adult. Choose "own seat" or add an adult.`);
+  if (raw.adults + kids + ages.length > 9) throw new Error(`${label}: Google Flights allows at most 9 travelers`);
   raw.cabin = f.cabin || 'economy';
   if (f.max_stops !== '' && f.max_stops != null) raw.max_stops = Number(f.max_stops);
   if (String(f.target_price).trim() !== '') raw.target_price = Number(f.target_price);
@@ -404,7 +416,7 @@ function githubBackend({ owner, repo, branch, token }) {
 /* ---------- rendering ---------- */
 const blank = () => ({ name: '', origin: '', destination: '', depart_from: '', depart_to: '',
   trip_type: 'round', return_mode: 'dates', return_from: '', return_to: '', length_days: '',
-  adults: 1, children: 0, cabin: 'economy', max_stops: '1', target_price: '', legs: [] });
+  adults: 1, children: 0, children_ages: '', infants: 'lap', cabin: 'economy', max_stops: '1', target_price: '', legs: [] });
 const blankLeg = (from = '', to = '', date = '') => ({ from, to, date_from: date, date_to: '' });
 
 function datesBetween(a, b) {
@@ -433,6 +445,16 @@ const combos = t => {
   return d * days(t.return_from, t.return_to);
 };
 const comboText = t => { const n = combos(t); return `${n} date combination${n === 1 ? '' : 's'}`; };
+// Google Flights fare types: 12+ adult fare, 2-11 child fare, under 2 infant
+function kidsHint(t) {
+  const ages = String(t.children_ages ?? '').split(/[,\s]+/).filter(Boolean).map(Number).filter(a => Number.isInteger(a) && a >= 0 && a <= 17);
+  if (!ages.length) return +t.children ? `${t.children} child${+t.children > 1 ? 'ren' : ''} (ages not set)` : 'Age on the travel date. Leave empty if none.';
+  const n = f => ages.filter(f).length, parts = [];
+  if (n(a => a >= 12)) parts.push(`${n(a => a >= 12)} pay adult fare`);
+  if (n(a => a >= 2 && a <= 11)) parts.push(`${n(a => a >= 2 && a <= 11)} child fare`);
+  if (n(a => a < 2)) parts.push(`${n(a => a < 2)} infant${n(a => a < 2) > 1 ? 's' : ''}`);
+  return parts.join(' · ');
+}
 const cityHint = code => CITY[String(code).toUpperCase()] || (code ? 'Airport code, e.g. JFK' : 'Type a city or 3-letter airport code');
 
 function field(i, key, label, attrs = '') {
@@ -500,7 +522,10 @@ function render() {
       </div>` : ''}`}
       <div class="grid three row">
         ${field(i, 'adults', 'Adults', 'type="number" min="1" max="9"')}
-        ${field(i, 'children', 'Children (2–11)', 'type="number" min="0" max="8"')}
+        <div><label for="f${i}children_ages">Children's ages</label>
+          <input id="f${i}children_ages" data-i="${i}" data-k="children_ages" value="${esc(t.children_ages)}" placeholder="e.g. 7, 4, 1" inputmode="numeric" autocomplete="off">
+          <div class="hint" id="f${i}kids">${esc(kidsHint(t))}</div></div>
+        ${select(i, 'infants', 'Babies under 2', [['lap','On a lap'],['seat','Own seat']])}
         ${select(i, 'cabin', 'Cabin', [['economy','Economy'],['premium_economy','Premium economy'],['business','Business'],['first','First']])}
         ${select(i, 'max_stops', 'Stops', [['','Any'],['0','Nonstop only'],['1','Up to 1 stop'],['2','Up to 2 stops']])}
         ${field(i, 'target_price', 'Alert me below (optional)', 'type="number" min="0" placeholder="e.g. 900"')}
@@ -554,6 +579,7 @@ $('#trips').addEventListener('input', e => {
     e.target.parentElement.querySelector('.hint').textContent = cityHint(v);
   }
   if (leg === undefined) state.trips[i][k] = v;
+  if (k === 'children_ages' || k === 'children') $(`#f${i}kids`).textContent = kidsHint(state.trips[i]);
   e.target.closest('section').querySelector('.combo').textContent = comboText(state.trips[i]);
   updateBudget();
 });

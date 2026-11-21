@@ -41,7 +41,9 @@ class Trip:
     return_dates: list[dt.date] = field(default_factory=list)
     trip_length_days: list[int] = field(default_factory=list)
     adults: int = 1
-    children: int = 0
+    children: int = 0                      # children 2-11 whose ages weren't given (older configs)
+    children_ages: list[int] = field(default_factory=list)  # age of each child on the travel date
+    infants_in_seat: bool = False          # under-2s get their own seat instead of a lap
     cabin: str = "economy"
     max_stops: int | None = None
     target_price: float | None = None
@@ -50,6 +52,32 @@ class Trip:
     @property
     def one_way(self) -> bool:
         return not self.legs and not self.return_dates and not self.trip_length_days
+
+    # Google Flights fare types: 12+ pay adult fares, 2-11 child fares, under 2 are infants
+    @property
+    def n_adults(self) -> int:
+        return self.adults + sum(1 for a in self.children_ages if a >= 12)
+
+    @property
+    def n_children(self) -> int:
+        return self.children + sum(1 for a in self.children_ages if 2 <= a <= 11)
+
+    @property
+    def n_infants(self) -> int:
+        return sum(1 for a in self.children_ages if a < 2)
+
+    @property
+    def travelers(self) -> str:
+        """'2 adults, 2 children (7, 4), 1 infant on lap' for the alert."""
+        parts = [f"{self.n_adults} adult{'s' if self.n_adults != 1 else ''}"]
+        kids = sorted((a for a in self.children_ages if 2 <= a <= 11), reverse=True)
+        if self.n_children:
+            ages = f" ({', '.join(map(str, kids))})" if kids and not self.children else ""
+            parts.append(f"{self.n_children} child{'ren' if self.n_children != 1 else ''}{ages}")
+        if self.n_infants:
+            where = "in own seat" if self.infants_in_seat else "on lap"
+            parts.append(f"{self.n_infants} infant{'s' if self.n_infants != 1 else ''} {where}")
+        return ", ".join(parts)
 
     @property
     def route(self) -> str:
@@ -143,6 +171,25 @@ def _parse_trip(raw: dict) -> Trip:
         raise ValueError(f"Trip '{raw['name']}': at least 1 adult is required")
     if cabin not in CABINS:
         raise ValueError(f"Trip '{raw['name']}': cabin must be one of {CABINS}")
+    ages_raw = raw.get("children_ages") or []
+    if not isinstance(ages_raw, list):
+        ages_raw = [ages_raw]
+    try:
+        ages = [int(a) for a in ages_raw]
+    except (TypeError, ValueError):
+        raise ValueError(f"Trip '{raw['name']}': children_ages must be whole numbers, e.g. [7, 4, 1]")
+    if any(a < 0 or a > 17 for a in ages):
+        raise ValueError(f"Trip '{raw['name']}': children's ages must be between 0 and 17")
+    infants = str(raw.get("infants", "lap")).lower()
+    if infants not in ("lap", "seat"):
+        raise ValueError(f"Trip '{raw['name']}': infants must be 'lap' or 'seat'")
+    adults_total = int(raw.get("adults", 1)) + sum(1 for a in ages if a >= 12)
+    n_infants = sum(1 for a in ages if a < 2)
+    if infants == "lap" and n_infants > adults_total:
+        raise ValueError(f"Trip '{raw['name']}': each lap infant needs an adult (12+); "
+                         f"choose 'own seat' or add an adult")
+    if int(raw.get("adults", 1)) + int(raw.get("children", 0)) + len(ages) > 9:
+        raise ValueError(f"Trip '{raw['name']}': Google Flights allows at most 9 travelers")
     lengths = raw.get("trip_length_days") or []
     if not isinstance(lengths, list):
         lengths = [lengths]
@@ -155,6 +202,8 @@ def _parse_trip(raw: dict) -> Trip:
         trip_length_days=[int(n) for n in lengths],
         adults=int(raw.get("adults", 1)),
         children=int(raw.get("children", 0)),
+        children_ages=ages,
+        infants_in_seat=infants == "seat",
         cabin=cabin,
         max_stops=None if raw.get("max_stops") is None else int(raw["max_stops"]),
         target_price=None if raw.get("target_price") is None else float(raw["target_price"]),

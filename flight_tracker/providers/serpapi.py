@@ -32,8 +32,10 @@ class SerpApiProvider(Provider):
             "type": 2 if search.ret is None else 1,
             "sort_by": 2,  # cheapest first
             "currency": currency,
-            "adults": trip.adults,
-            "children": trip.children,
+            "adults": trip.n_adults,          # includes children 12+, who pay adult fares
+            "children": trip.n_children,      # 2-11
+            "infants_in_seat": trip.n_infants if trip.infants_in_seat else 0,
+            "infants_on_lap": 0 if trip.infants_in_seat else trip.n_infants,
             "travel_class": TRAVEL_CLASS[trip.cabin],
             "stops": STOPS.get(trip.max_stops, 0) if trip.max_stops is not None else 0,
             "hl": "en",
