@@ -1,0 +1,158 @@
+"""Run the daily check: search, keep the cheapest per trip, update history, send the alert.
+
+    python -m flight_tracker.main                 # real run (needs SERPAPI_KEY, TELEGRAM_* env vars)
+    python -m flight_tracker.main --dry-run       # print the message instead of sending it
+    python -m flight_tracker.main --mock --dry-run  # try it with fake prices, no keys needed
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import html
+import os
+import sys
+
+from .config import Search, Trip, load_config, plan_searches
+from .history import History
+from .notify import send_telegram
+from .providers import Offer, available_providers
+
+
+def fmt_money(amount: float, currency: str) -> str:
+    symbol = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹", "CAD": "C$", "AUD": "A$"}.get(currency)
+    return f"{symbol}{amount:,.0f}" if symbol else f"{amount:,.0f} {currency}"
+
+
+def fmt_duration(minutes: int | None) -> str:
+    return "" if not minutes else f"{minutes // 60}h {minutes % 60:02d}m"
+
+
+def fmt_date(d: dt.date) -> str:
+    return d.strftime("%a %b %-d")
+
+
+def stops_label(n: int) -> str:
+    return "nonstop" if n == 0 else f"{n} stop" + ("s" if n > 1 else "")
+
+
+def trip_block(trip: Trip, search: Search, offer: Offer | None, history: History,
+               currency: str, errors: list[str]) -> str:
+    title = f"<b>{html.escape(trip.name)}</b>  ({trip.origin} → {trip.destination})"
+    if offer is None:
+        reason = "; ".join(errors) if errors else "no flights found for today's dates"
+        return f"{title}\n⚠️ {html.escape(reason)}"
+
+    when = fmt_date(search.depart) + (f" → {fmt_date(search.ret)}" if search.ret else " (one-way)")
+    airline = ", ".join(offer.airlines) or "Unknown airline"
+    flights = " / ".join(offer.flight_numbers[:4])
+    details = " · ".join(x for x in [stops_label(offer.stops), fmt_duration(offer.duration_minutes)] if x)
+    lines = [
+        title,
+        f"💰 <b>{fmt_money(offer.price, currency)}</b> · {html.escape(airline)}" + (f" ({html.escape(flights)})" if flights else ""),
+        f"📅 {when} · {details}",
+    ]
+
+    prev = history.last_price(trip.name)
+    lowest = history.lowest_ever(trip.name)
+    trend = []
+    if prev is not None:
+        diff = offer.price - prev
+        if abs(diff) < 1:
+            trend.append("no change since last check")
+        else:
+            arrow = "🔻" if diff < 0 else "🔺"
+            trend.append(f"{arrow} {fmt_money(abs(diff), currency)} vs last check")
+    if lowest is None or offer.price < lowest["price"]:
+        trend.append("🏆 lowest price seen so far")
+    else:
+        trend.append(f"lowest seen {fmt_money(lowest['price'], currency)} on {lowest['date']}")
+    if offer.price_level:
+        trend.append(f"Google says prices are {offer.price_level}")
+    lines.append(" · ".join(trend))
+
+    if trip.target_price is not None and offer.price <= trip.target_price:
+        lines.append(f"🎯 <b>Below your target of {fmt_money(trip.target_price, currency)}. Good time to book.</b>")
+    if offer.link:
+        lines.append(f'<a href="{html.escape(offer.link)}">Open in Google Flights</a>')
+    return "\n".join(lines)
+
+
+def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, today: dt.date | None = None) -> int:
+    today = today or dt.date.today()
+    config = load_config(config_path)
+    providers = available_providers(use_mock)
+    if not providers:
+        print("No flight source configured. Set SERPAPI_KEY (or use --mock).", file=sys.stderr)
+        return 2
+
+    history = History(history_path)
+    planned = plan_searches(config, today)
+
+    # cheapest offer per trip across every date combination and provider checked today
+    best: dict[str, tuple[Search, Offer]] = {}
+    errors: dict[str, list[str]] = {}
+    for trip, search in planned:
+        for provider in providers:
+            try:
+                offers = provider.search(trip, search, config.currency)
+            except Exception as exc:  # keep going: one failed search shouldn't kill the alert
+                errors.setdefault(trip.name, []).append(f"{provider.name}: {exc}")
+                print(f"[warn] {trip.name} {search.key} {provider.name}: {exc}", file=sys.stderr)
+                continue
+            for offer in offers:
+                if trip.max_stops is not None and offer.stops > trip.max_stops:
+                    continue
+                if trip.name not in best or offer.price < best[trip.name][1].price:
+                    best[trip.name] = (search, offer)
+
+    blocks = []
+    for trip in config.trips:
+        if not trip.searches(today):
+            blocks.append(f"<b>{html.escape(trip.name)}</b>\nAll travel dates are in the past. Remove or update this trip.")
+            continue
+        if trip.name in best:
+            search, offer = best[trip.name]
+        elif any(t is trip for t, _ in planned):
+            search, offer = planned[[t for t, _ in planned].index(trip)][1], None
+        else:
+            continue  # not in today's rotation and nothing to report
+        blocks.append(trip_block(trip, search, offer, history, config.currency, errors.get(trip.name, [])))
+        if offer is not None:
+            history.record(trip.name, today.isoformat(), offer.price, {
+                "depart": search.depart.isoformat(),
+                "return": search.ret.isoformat() if search.ret else None,
+                "airlines": offer.airlines,
+                "stops": offer.stops,
+            })
+
+    total = sum(len(t.searches(today)) for t in config.trips)
+    footer = f"<i>Checked {len(planned)} of {total} date combinations today.</i>"
+    message = f"✈️ <b>Daily flight check: {today.strftime('%b %-d, %Y')}</b>\n\n" + "\n\n".join(blocks) + f"\n\n{footer}"
+
+    if dry_run:
+        print(message)
+    else:
+        token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+        if not token or not chat_id:
+            print("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set (or use --dry-run).", file=sys.stderr)
+            return 2
+        send_telegram(token, chat_id, message)
+        print("Alert sent to Telegram.")
+    if not use_mock:
+        history.save()
+    return 0
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Daily cheapest-flight tracker")
+    p.add_argument("--config", default="trips.yaml")
+    p.add_argument("--history", default="data/history.json")
+    p.add_argument("--dry-run", action="store_true", help="print the alert instead of sending it")
+    p.add_argument("--mock", action="store_true", help="use fake prices (no API key needed)")
+    args = p.parse_args()
+    sys.exit(run(args.config, args.history, args.dry_run, args.mock))
+
+
+if __name__ == "__main__":
+    main()
