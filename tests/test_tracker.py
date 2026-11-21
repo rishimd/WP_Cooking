@@ -149,3 +149,56 @@ def test_local_server_validates_before_saving(tmp_path):
         assert r["text"] == good
     finally:
         srv.shutdown()
+
+
+MULTI = {"name": "Tour", "legs": [
+    {"from": "JFK", "to": "DEL", "dates": "2027-01-10..2027-01-11"},
+    {"from": "DEL", "to": "BOM", "dates": ["2027-01-11", "2027-01-18"]},
+    {"from": "BOM", "to": "JFK", "dates": "2027-01-28"}], "adults": 2}
+
+
+def test_multi_city_searches_keep_flights_in_order():
+    from flight_tracker.config import parse_config
+    trip = parse_config({"trips": [MULTI]}).trips[0]
+    assert trip.route == "JFK → DEL → BOM → JFK" and not trip.one_way
+    keys = [s.key for s in trip.searches(TODAY)]
+    # 2 x 2 x 1 = 4, all in order (Jan 11 -> Jan 11 is allowed: same-day connection)
+    assert keys == ["2027-01-10_2027-01-11_2027-01-28", "2027-01-10_2027-01-18_2027-01-28",
+                    "2027-01-11_2027-01-11_2027-01-28", "2027-01-11_2027-01-18_2027-01-28"]
+    bad = dict(MULTI, legs=[MULTI["legs"][0], {"from": "DEL", "to": "BOM", "dates": "2027-01-01"}])
+    assert parse_config({"trips": [bad]}).trips[0].searches(TODAY) == []
+
+
+def test_multi_city_validation():
+    import pytest
+    from flight_tracker.config import parse_config
+    with pytest.raises(ValueError, match="at least 2"):
+        parse_config({"trips": [dict(MULTI, legs=MULTI["legs"][:1])]})
+    with pytest.raises(ValueError, match="flight 2"):
+        parse_config({"trips": [dict(MULTI, legs=[MULTI["legs"][0], {"from": "DEL"}])]})
+
+
+def test_multi_city_serpapi_params():
+    from flight_tracker.config import parse_config
+    trip = parse_config({"trips": [MULTI]}).trips[0]
+    p = SerpApiProvider("k").build_params(trip, trip.searches(TODAY)[0], "USD")
+    assert p["type"] == 3 and "outbound_date" not in p and "departure_id" not in p
+    assert json.loads(p["multi_city_json"]) == [
+        {"departure_id": "JFK", "arrival_id": "DEL", "date": "2027-01-10"},
+        {"departure_id": "DEL", "arrival_id": "BOM", "date": "2027-01-11"},
+        {"departure_id": "BOM", "arrival_id": "JFK", "date": "2027-01-28"}]
+
+
+def test_multi_city_message(tmp_path, monkeypatch, capsys):
+    import yaml
+    cfg = tmp_path / "trips.yaml"
+    cfg.write_text(yaml.safe_dump({"max_searches_per_run": 3, "trips": [MULTI]}))
+    monkeypatch.setenv("SERPAPI_KEY", "x")
+    monkeypatch.setattr(SerpApiProvider, "search", lambda self, t, s, c: parse_response(SAMPLE, c))
+    hist = tmp_path / "h.json"
+    assert run(str(cfg), str(hist), dry_run=True, use_mock=False, today=TODAY) == 0
+    out = capsys.readouterr().out
+    assert "JFK → DEL → BOM → JFK" in out and "total for all flights" in out
+    assert "Sun Jan 10: JFK → DEL" in out and "Thu Jan 28: BOM → JFK" in out
+    assert "Checked 3 of 4" in out
+    assert History(hist).data["Tour"]["daily"][0]["flights"][2] == {"from": "BOM", "to": "JFK", "date": "2027-01-28"}

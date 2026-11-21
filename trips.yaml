@@ -5,6 +5,11 @@
 #   or a mix of both. Leave out return_dates (and trip_length_days) for a one-way trip.
 #   Instead of return_dates you can give trip_length_days: [10, 14] (nights away).
 #
+# Multi-city
+#   Use legs: instead of origin/destination/depart_dates. List each flight in order
+#   (2 to 6 flights). Each flight's dates can be one date or a range. The price is the
+#   total for the whole itinerary.
+#
 # Search budget
 #   SerpApi's free plan allows 100 searches a month, about 3 a day. Each combination of
 #   depart date x return date is one search. When a trip has more combinations than
@@ -15,12 +20,27 @@ currency: USD
 max_searches_per_run: 3      # keep at 3 or less on SerpApi's free plan
 
 trips:
-  - name: "Example: New York to Delhi"   # replace with your real plan
-    origin: JFK                          # IATA airport code (or city code, e.g. NYC)
-    destination: DEL
-    depart_dates: "2027-01-10..2027-01-12"
-    trip_length_days: [14]
+  - name: "Example: India multi-city"     # replace with your real plan
+    legs:
+      - from: JFK                          # IATA airport code(s), e.g. JFK or JFK,EWR
+        to: DEL
+        dates: "2027-01-10..2027-01-11"    # one date or a flexible range
+      - from: DEL
+        to: BOM
+        dates: "2027-01-18"
+      - from: BOM
+        to: JFK
+        dates: "2027-01-28"
     adults: 1
     cabin: economy                       # economy | premium_economy | business | first
     max_stops: 1                         # 0 = nonstop only, 1, 2, or omit for any
-    target_price: 900                    # get an extra alert when it drops below this
+    target_price: 1400                   # get an extra alert when it drops below this
+
+  # A round trip looks like this:
+  # - name: "Holiday"
+  #   origin: JFK
+  #   destination: DEL
+  #   depart_dates: "2027-01-10..2027-01-12"
+  #   trip_length_days: [14]             # or return_dates: "2027-01-24"
+  #   adults: 2
+  #   children: 1

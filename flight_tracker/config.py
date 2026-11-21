@@ -16,10 +16,20 @@ CABINS = ("economy", "premium_economy", "business", "first")
 class Search:
     depart: dt.date
     ret: dt.date | None
+    leg_dates: tuple[dt.date, ...] = ()   # multi-city: one date per flight
 
     @property
     def key(self) -> str:
+        if self.leg_dates:
+            return "_".join(d.isoformat() for d in self.leg_dates)
         return f"{self.depart.isoformat()}_{self.ret.isoformat() if self.ret else 'oneway'}"
+
+
+@dataclass
+class Leg:
+    origin: str
+    destination: str
+    dates: list[dt.date]
 
 
 @dataclass
@@ -35,13 +45,24 @@ class Trip:
     cabin: str = "economy"
     max_stops: int | None = None
     target_price: float | None = None
+    legs: list[Leg] = field(default_factory=list)  # set for multi-city trips
 
     @property
     def one_way(self) -> bool:
-        return not self.return_dates and not self.trip_length_days
+        return not self.legs and not self.return_dates and not self.trip_length_days
+
+    @property
+    def route(self) -> str:
+        if self.legs:
+            return " → ".join([self.legs[0].origin] + [leg.destination for leg in self.legs])
+        return f"{self.origin} → {self.destination}"
 
     def searches(self, today: dt.date) -> list[Search]:
         """All future date combinations for this trip, in date order."""
+        if self.legs:
+            combos = itertools.product(*(leg.dates for leg in self.legs))
+            return [Search(c[0], None, tuple(c)) for c in combos
+                    if c[0] >= today and all(a <= b for a, b in zip(c, c[1:]))]
         out: list[Search] = []
         for d in self.depart_dates:
             if d < today:
@@ -91,8 +112,26 @@ def _airports(value) -> str:
     return ",".join(codes)
 
 
+def _parse_legs(raw: dict) -> list[Leg]:
+    legs = raw.get("legs")
+    if not isinstance(legs, list) or len(legs) < 2:
+        raise ValueError(f"Trip '{raw.get('name')}': a multi-city trip needs at least 2 flights")
+    if len(legs) > 6:
+        raise ValueError(f"Trip '{raw.get('name')}': Google Flights allows at most 6 flights")
+    out = []
+    for i, leg in enumerate(legs, 1):
+        if not isinstance(leg, dict) or not all(leg.get(k) for k in ("from", "to", "dates")):
+            raise ValueError(f"Trip '{raw.get('name')}': flight {i} needs from, to and dates")
+        out.append(Leg(_airports(leg["from"]), _airports(leg["to"]), _parse_dates(leg["dates"])))
+    return out  # flight order (each date on or after the previous) is enforced in Trip.searches
+
+
 def _parse_trip(raw: dict) -> Trip:
-    for key in ("name", "origin", "destination", "depart_dates"):
+    if not raw.get("name"):
+        raise ValueError(f"Trip is missing 'name': {raw}")
+    legs = _parse_legs(raw) if raw.get("legs") is not None else []
+    required = () if legs else ("origin", "destination", "depart_dates")
+    for key in required:
         if not raw.get(key):
             raise ValueError(f"Trip is missing '{key}': {raw}")
     cabin = str(raw.get("cabin", "economy")).lower()
@@ -105,9 +144,9 @@ def _parse_trip(raw: dict) -> Trip:
         lengths = [lengths]
     return Trip(
         name=str(raw["name"]),
-        origin=_airports(raw["origin"]),
-        destination=_airports(raw["destination"]),
-        depart_dates=_parse_dates(raw["depart_dates"]),
+        origin=legs[0].origin if legs else _airports(raw["origin"]),
+        destination=legs[-1].destination if legs else _airports(raw["destination"]),
+        depart_dates=legs[0].dates if legs else _parse_dates(raw["depart_dates"]),
         return_dates=_parse_dates(raw.get("return_dates")),
         trip_length_days=[int(n) for n in lengths],
         adults=int(raw.get("adults", 1)),
@@ -115,6 +154,7 @@ def _parse_trip(raw: dict) -> Trip:
         cabin=cabin,
         max_stops=None if raw.get("max_stops") is None else int(raw["max_stops"]),
         target_price=None if raw.get("target_price") is None else float(raw["target_price"]),
+        legs=legs,
     )
 
 

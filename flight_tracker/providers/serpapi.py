@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import requests
 
 from ..config import Search, Trip
@@ -27,6 +29,7 @@ class SerpApiProvider(Provider):
             "arrival_id": trip.destination,
             "outbound_date": search.depart.isoformat(),
             "type": 2 if search.ret is None else 1,
+            "sort_by": 2,  # cheapest first
             "currency": currency,
             "adults": trip.adults,
             "children": trip.children,
@@ -37,6 +40,15 @@ class SerpApiProvider(Provider):
         }
         if search.ret is not None:
             params["return_date"] = search.ret.isoformat()
+        if trip.legs:
+            # multi-city: Google Flights lists options for the first flight, priced for the whole itinerary
+            for key in ("departure_id", "arrival_id", "outbound_date", "return_date"):
+                params.pop(key, None)
+            params["type"] = 3
+            params["multi_city_json"] = json.dumps([
+                {"departure_id": leg.origin, "arrival_id": leg.destination, "date": d.isoformat()}
+                for leg, d in zip(trip.legs, search.leg_dates)
+            ])
         return params
 
     def search(self, trip: Trip, search: Search, currency: str) -> list[Offer]:

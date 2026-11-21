@@ -69,6 +69,8 @@
   .price { font-size: 20px; font-weight: 700; white-space: nowrap; }
   .gate { text-align: left; }
   ol { padding-left: 20px; margin: 8px 0; } li { margin: 4px 0; }
+  .leg { border-top: 1px dashed var(--line); padding-top: 12px; margin-top: 12px; }
+  .leg-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 14px; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -189,7 +191,12 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const CITY = {};
-document.querySelectorAll('#cities option').forEach(o => CITY[o.value] = o.textContent);
+document.querySelectorAll('#cities option').forEach(o => {
+  CITY[o.value] = o.textContent;
+  // each airport in a group also names its city: JFK -> New York
+  const city = o.textContent.replace(/\s*\(.*\)$/, '');
+  o.value.split(',').forEach(code => { if (!CITY[code]) CITY[code] = city; });
+});
 const WORKFLOW = 'daily-flight-check.yml';
 const STORE_KEY = 'flightTracker.github';
 const YAML_HEADER = '# Your travel plan. Edit it in the trip page or by hand.\n' +
@@ -239,10 +246,15 @@ function toForm(raw) {
   const dep = parseDates(raw.depart_dates), ret = parseDates(raw.return_dates);
   let lengths = raw.trip_length_days ?? [];
   if (!Array.isArray(lengths)) lengths = [lengths];
+  const legs = Array.isArray(raw.legs) ? raw.legs.map(l => {
+    const d = parseDates(l.dates);
+    return { from: l.from ?? '', to: l.to ?? '', date_from: d[0] ?? '', date_to: d.length > 1 ? d[d.length - 1] : '' };
+  }) : [];
   return {
+    legs,
     name: raw.name ?? '', origin: raw.origin ?? '', destination: raw.destination ?? '',
     depart_from: dep[0] ?? '', depart_to: dep.length > 1 ? dep[dep.length - 1] : '',
-    trip_type: ret.length || lengths.length ? 'round' : 'oneway',
+    trip_type: legs.length ? 'multi' : ret.length || lengths.length ? 'round' : 'oneway',
     return_mode: !ret.length && lengths.length ? 'length' : 'dates',
     return_from: ret[0] ?? '', return_to: ret.length > 1 ? ret[ret.length - 1] : '',
     length_days: lengths.join(', '),
@@ -252,7 +264,40 @@ function toForm(raw) {
   };
 }
 
+const CODES = /^[A-Z]{3}(,[A-Z]{3})*$/;
+const clean = v => String(v ?? '').trim().toUpperCase().replace(/\s+/g, '');
+
+function commonFields(raw, f) {
+  raw.adults = Math.max(1, parseInt(f.adults, 10) || 1);
+  const kids = parseInt(f.children, 10) || 0;
+  if (kids > 0) raw.children = kids;
+  raw.cabin = f.cabin || 'economy';
+  if (f.max_stops !== '' && f.max_stops != null) raw.max_stops = Number(f.max_stops);
+  if (String(f.target_price).trim() !== '') raw.target_price = Number(f.target_price);
+  return raw;
+}
+
+function multiFromForm(f, i) {
+  const legs = f.legs || [];
+  const name = String(f.name || [clean(legs[0]?.from), ...legs.map(l => clean(l.to))].join(' → ')).trim();
+  const label = name || `Trip ${i + 1}`;
+  if (legs.length < 2) throw new Error(`${label}: a multi-city trip needs at least 2 flights`);
+  if (legs.length > 6) throw new Error(`${label}: Google Flights allows at most 6 flights`);
+  let prev = '';
+  const out = legs.map((l, n) => {
+    const from = clean(l.from), to = clean(l.to);
+    if (!CODES.test(from) || !CODES.test(to)) throw new Error(`${label}, flight ${n + 1}: pick cities from the list or 3-letter airport codes`);
+    if (!l.date_from) throw new Error(`${label}, flight ${n + 1}: pick a date`);
+    if (l.date_to && l.date_to < l.date_from) throw new Error(`${label}, flight ${n + 1}: "flexible until" is before the date`);
+    if ((l.date_to || l.date_from) < prev) throw new Error(`${label}, flight ${n + 1}: its dates are before flight ${n}`);
+    prev = l.date_from;
+    return { from, to, dates: range(l.date_from, l.date_to) };
+  });
+  return commonFields({ name, legs: out }, f);
+}
+
 function fromForm(f, i) {
+  if (f.trip_type === 'multi') return multiFromForm(f, i);
   const origin = String(f.origin).trim().toUpperCase().replace(/\s+/g, '');
   const destination = String(f.destination).trim().toUpperCase().replace(/\s+/g, '');
   const name = String(f.name || `${origin} to ${destination}`).trim();
@@ -275,13 +320,7 @@ function fromForm(f, i) {
       raw.return_dates = range(f.return_from, f.return_to);
     }
   }
-  raw.adults = Math.max(1, parseInt(f.adults, 10) || 1);
-  const kids = parseInt(f.children, 10) || 0;
-  if (kids > 0) raw.children = kids;
-  raw.cabin = f.cabin || 'economy';
-  if (f.max_stops !== '' && f.max_stops != null) raw.max_stops = Number(f.max_stops);
-  if (String(f.target_price).trim() !== '') raw.target_price = Number(f.target_price);
-  return raw;
+  return commonFields(raw, f);
 }
 
 function buildYaml() {
@@ -364,10 +403,29 @@ function githubBackend({ owner, repo, branch, token }) {
 /* ---------- rendering ---------- */
 const blank = () => ({ name: '', origin: '', destination: '', depart_from: '', depart_to: '',
   trip_type: 'round', return_mode: 'dates', return_from: '', return_to: '', length_days: '',
-  adults: 1, children: 0, cabin: 'economy', max_stops: '1', target_price: '' });
+  adults: 1, children: 0, cabin: 'economy', max_stops: '1', target_price: '', legs: [] });
+const blankLeg = (from = '', to = '', date = '') => ({ from, to, date_from: date, date_to: '' });
+
+function datesBetween(a, b) {
+  if (!a) return [];
+  const out = [];
+  for (let d = a; d <= (b && b > a ? b : a) && out.length < 60; d = addDays(d, 1)) out.push(d);
+  return out;
+}
 
 const days = (a, b) => (!a ? 0 : !b || b <= a ? 1 : Math.round((new Date(b) - new Date(a)) / 864e5) + 1);
 const combos = t => {
+  if (t.trip_type === 'multi') {
+    // count date choices where each flight is on or after the previous one
+    let ways = new Map([['', 1]]);
+    for (const l of t.legs || []) {
+      const next = new Map();
+      for (const d of datesBetween(l.date_from, l.date_to))
+        for (const [prev, n] of ways) if (d >= prev) next.set(d, (next.get(d) || 0) + n);
+      ways = next;
+    }
+    return (t.legs || []).length ? [...ways.values()].reduce((a, b) => a + b, 0) : 0;
+  }
   const d = days(t.depart_from, t.depart_to);
   if (t.trip_type === 'oneway') return d;
   if (t.return_mode === 'length') return d * String(t.length_days).split(',').filter(x => x.trim()).length;
@@ -386,25 +444,45 @@ function select(i, key, label, options) {
     ${options.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
 }
 
+function legsHtml(t, i) {
+  const legs = t.legs;
+  const inp = (n, k, label, attrs) => `<div><label for="f${i}l${n}${k}">${label}</label>
+    <input id="f${i}l${n}${k}" data-i="${i}" data-leg="${n}" data-k="${k}" value="${esc(legs[n][k])}" ${attrs}>
+    ${k === 'from' || k === 'to' ? `<div class="hint">${esc(cityHint(legs[n][k]))}</div>` : ''}</div>`;
+  return legs.map((l, n) => `
+    <div class="leg">
+      <div class="leg-head"><b>Flight ${n + 1}</b>${legs.length > 2 ? `<button class="link" data-i="${i}" data-delleg="${n}">Remove flight</button>` : ''}</div>
+      <div class="grid">
+        ${inp(n, 'from', 'From', 'list="cities" placeholder="City or airport" autocomplete="off"')}
+        ${inp(n, 'to', 'To', 'list="cities" placeholder="City or airport" autocomplete="off"')}
+        ${inp(n, 'date_from', 'Date', 'type="date"')}
+        ${inp(n, 'date_to', 'Flexible until (optional)', 'type="date"')}
+      </div>
+    </div>`).join('') +
+    (legs.length < 6 ? `<div class="row"><button class="small" data-i="${i}" data-addleg="1">+ Add flight</button></div>` : '');
+}
+
 function render() {
   $('#trips').innerHTML = state.trips.map((t, i) => {
-    const round = t.trip_type === 'round', byLen = t.return_mode === 'length';
+    const round = t.trip_type === 'round', multi = t.trip_type === 'multi', byLen = t.return_mode === 'length';
     return `<section class="card">
       <div class="card-head">
         <input data-i="${i}" data-k="name" value="${esc(t.name)}" placeholder="Trip name (e.g. Diwali home trip)" aria-label="Trip name">
         <button class="link" data-del="${i}">Remove</button>
       </div>
-      <div class="grid">
+      <div class="seg" role="group" aria-label="Trip type">
+        <button data-i="${i}" data-set="trip_type" data-v="round" class="${round ? 'on' : ''}">Round trip</button>
+        <button data-i="${i}" data-set="trip_type" data-v="oneway" class="${t.trip_type === 'oneway' ? 'on' : ''}">One-way</button>
+        <button data-i="${i}" data-set="trip_type" data-v="multi" class="${multi ? 'on' : ''}">Multi-city</button>
+      </div>
+      ${multi ? legsHtml(t, i) : `
+      <div class="grid row">
         <div><label for="f${i}origin">From</label>
           <input id="f${i}origin" list="cities" data-i="${i}" data-k="origin" value="${esc(t.origin)}" placeholder="City or airport" autocomplete="off">
           <div class="hint">${esc(cityHint(t.origin))}</div></div>
         <div><label for="f${i}destination">To</label>
           <input id="f${i}destination" list="cities" data-i="${i}" data-k="destination" value="${esc(t.destination)}" placeholder="City or airport" autocomplete="off">
           <div class="hint">${esc(cityHint(t.destination))}</div></div>
-      </div>
-      <div class="row seg" role="group" aria-label="Trip type">
-        <button data-i="${i}" data-set="trip_type" data-v="round" class="${round ? 'on' : ''}">Round trip</button>
-        <button data-i="${i}" data-set="trip_type" data-v="oneway" class="${round ? '' : 'on'}">One-way</button>
       </div>
       <div class="grid row">
         ${field(i, 'depart_from', 'Depart on', 'type="date"')}
@@ -418,7 +496,7 @@ function render() {
       <div class="grid row">
         ${byLen ? field(i, 'length_days', 'Days away (e.g. 10 or 10, 14)', 'inputmode="numeric"') :
           field(i, 'return_from', 'Return on', 'type="date"') + field(i, 'return_to', 'Flexible until (optional)', 'type="date"')}
-      </div>` : ''}
+      </div>` : ''}`}
       <div class="grid three row">
         ${field(i, 'adults', 'Adults', 'type="number" min="1" max="9"')}
         ${field(i, 'children', 'Children (2–11)', 'type="number" min="0" max="8"')}
@@ -447,7 +525,9 @@ function renderLatest(historyText) {
     const h = hist[t.name]; const last = h?.daily?.[h.daily.length - 1];
     if (!last) return '';
     const low = h.lowest_ever;
-    const when = `${niceDate(last.depart)}${last.return ? ' → ' + niceDate(last.return) : ' (one-way)'}`;
+    const when = last.flights
+      ? last.flights.map(f => `${niceDate(f.date)} ${f.from}→${f.to}`).join(' · ')
+      : `${niceDate(last.depart)}${last.return ? ' → ' + niceDate(last.return) : ' (one-way)'}`;
     return `<div class="price-row"><div><b>${esc(t.name)}</b><div class="muted">${esc(when)} · ${esc((last.airlines || []).join(', '))}</div>
       <div class="hint">checked ${esc(niceDate(last.date))}${low ? ` · lowest seen ${esc(money(low.price, state.currency))}` : ''}</div></div>
       <div class="price">${esc(money(last.price, state.currency))}</div></div>`;
@@ -458,22 +538,38 @@ function renderLatest(historyText) {
 
 /* ---------- events ---------- */
 $('#trips').addEventListener('input', e => {
-  const { i, k } = e.target.dataset;
+  const { i, k, leg } = e.target.dataset;
   if (i === undefined || !k) return;
   let v = e.target.value;
-  if (k === 'origin' || k === 'destination') {
+  if (leg !== undefined) {
+    if (k === 'from' || k === 'to') {
+      v = v.toUpperCase(); e.target.value = v;
+      e.target.parentElement.querySelector('.hint').textContent = cityHint(v);
+    }
+    state.trips[i].legs[leg][k] = v;
+  } else if (k === 'origin' || k === 'destination') {
     v = v.toUpperCase();
     e.target.value = v;
     e.target.parentElement.querySelector('.hint').textContent = cityHint(v);
   }
-  state.trips[i][k] = v;
+  if (leg === undefined) state.trips[i][k] = v;
   e.target.closest('section').querySelector('.combo').textContent = comboText(state.trips[i]);
   updateBudget();
 });
 $('#trips').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.del !== undefined) { state.trips.splice(Number(b.dataset.del), 1); render(); }
-  if (b.dataset.set) { state.trips[b.dataset.i][b.dataset.set] = b.dataset.v; render(); }
+  const t = state.trips[b.dataset.i];
+  if (b.dataset.set) {
+    t[b.dataset.set] = b.dataset.v;
+    if (b.dataset.v === 'multi' && !(t.legs || []).length) {
+      // start from what's already filled in: out, then back
+      t.legs = [blankLeg(t.origin, t.destination, t.depart_from), blankLeg(t.destination, t.origin, t.return_from)];
+    }
+    render();
+  }
+  if (b.dataset.addleg) { const last = t.legs[t.legs.length - 1]; t.legs.push(blankLeg(last?.to || '', '', '')); render(); }
+  if (b.dataset.delleg !== undefined) { t.legs.splice(Number(b.dataset.delleg), 1); render(); }
 });
 $('#add').onclick = () => { state.trips.push(blank()); render(); };
 $('#budget').oninput = updateBudget;

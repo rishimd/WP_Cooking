@@ -30,7 +30,7 @@ Go to your repo's **Settings → Secrets and variables → Actions → New repos
 
 ### 4. Enter your travel plan: the trip page
 
-There's one page for entering trips, with cities, dates, adults and children, cabin, stops and an alert price. You can use it two ways.
+There's one page for entering trips, with cities, dates, adults and children, cabin, stops and an alert price. Each trip is **round trip**, **one-way** or **multi-city**. For multi-city, add each flight in order (2 to 6 flights, for example New York → Delhi → Mumbai → New York), each with a date and an optional flexible range. The alert shows the cheapest **total price for the whole itinerary** and the best date for each flight. You can use the page two ways.
 
 **A. From your phone or any browser (hosted on GitHub Pages)**
 1. In the repo, open **Settings → Pages**. Under **Build and deployment**, choose **Deploy from a branch**, then select your default branch and the **/docs** folder, and save. After a minute, GitHub shows the page address, for example `https://<you>.github.io/<repo>/`.
@@ -63,7 +63,7 @@ python -m pytest -q
 ```
 
 ## Staying within the free search limit
-Each depart-date × return-date combination costs one search. `max_searches_per_run: 3` keeps you inside SerpApi's 100 searches a month. If your plan has more combinations than that, the tracker checks a different set each day and cycles through all of them, and the message footer shows how many it covered. On a paid plan, raise `max_searches_per_run` to check every combination daily.
+Each date combination costs one search: departure × return dates for a round trip, or one date per flight for multi-city. Flexible ranges on several flights multiply quickly, so keep them short. `max_searches_per_run: 3` keeps you inside SerpApi's 100 searches a month. If your plan has more combinations than that, the tracker checks a different set each day and cycles through all of them, and the message footer shows how many it covered. On a paid plan, raise `max_searches_per_run` to check every combination daily.
 
 ## Layout
 ```

@@ -38,20 +38,27 @@ def stops_label(n: int) -> str:
 
 def trip_block(trip: Trip, search: Search, offer: Offer | None, history: History,
                currency: str, errors: list[str]) -> str:
-    title = f"<b>{html.escape(trip.name)}</b>  ({trip.origin} → {trip.destination})"
+    title = f"<b>{html.escape(trip.name)}</b>  ({trip.route})"
     if offer is None:
         reason = "; ".join(errors) if errors else "no flights found for today's dates"
         return f"{title}\n⚠️ {html.escape(reason)}"
 
-    when = fmt_date(search.depart) + (f" → {fmt_date(search.ret)}" if search.ret else " (one-way)")
+    if trip.legs:
+        when = "\n".join(f"   {fmt_date(d)}: {leg.origin} → {leg.destination}"
+                         for leg, d in zip(trip.legs, search.leg_dates))
+    else:
+        when = fmt_date(search.depart) + (f" → {fmt_date(search.ret)}" if search.ret else " (one-way)")
     airline = ", ".join(offer.airlines) or "Unknown airline"
     flights = " / ".join(offer.flight_numbers[:4])
     details = " · ".join(x for x in [stops_label(offer.stops), fmt_duration(offer.duration_minutes)] if x)
-    lines = [
-        title,
-        f"💰 <b>{fmt_money(offer.price, currency)}</b> · {html.escape(airline)}" + (f" ({html.escape(flights)})" if flights else ""),
-        f"📅 {when} · {details}",
-    ]
+    price_line = f"💰 <b>{fmt_money(offer.price, currency)}</b>"
+    if trip.legs:
+        lines = [title, price_line + " total for all flights",
+                 f"📅 Cheapest dates:\n{when}",
+                 f"First flight: {html.escape(airline)}" + (f" ({html.escape(flights)})" if flights else "") + f" · {details}"]
+    else:
+        lines = [title, price_line + f" · {html.escape(airline)}" + (f" ({html.escape(flights)})" if flights else ""),
+                 f"📅 {when} · {details}"]
 
     prev = history.last_price(trip.name)
     lowest = history.lowest_ever(trip.name)
@@ -117,6 +124,8 @@ def build_report(config: Config, providers: list[Provider], history: History,
             history.record(trip.name, today.isoformat(), offer.price, {
                 "depart": search.depart.isoformat(),
                 "return": search.ret.isoformat() if search.ret else None,
+                "flights": [{"from": leg.origin, "to": leg.destination, "date": d.isoformat()}
+                            for leg, d in zip(trip.legs, search.leg_dates)] or None,
                 "airlines": offer.airlines,
                 "stops": offer.stops,
             })
