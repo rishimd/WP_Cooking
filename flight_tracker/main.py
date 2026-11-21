@@ -11,6 +11,7 @@ import argparse
 import datetime as dt
 import html
 import os
+import re
 import sys
 
 from .config import Config, Search, Trip, load_config, plan_searches
@@ -135,6 +136,30 @@ def build_report(config: Config, providers: list[Provider], history: History,
     return f"✈️ <b>Daily flight check: {today.strftime('%b %-d, %Y')}</b>\n\n" + "\n\n".join(blocks) + f"\n\n{footer}"
 
 
+def to_plain(message: str) -> str:
+    """Telegram HTML -> plain text for logs."""
+    text = re.sub(r'<a href="([^"]+)">([^<]+)</a>', r"\2: \1", message)
+    return html.unescape(re.sub(r"</?[bi]>", "", text))
+
+
+def to_markdown(message: str) -> str:
+    """Telegram HTML -> Markdown for the GitHub Actions run page."""
+    text = re.sub(r'<a href="([^"]+)">([^<]+)</a>', r"[\2](\1)", message)
+    text = re.sub(r"</?b>", "**", text)
+    text = re.sub(r"</?i>", "_", text)
+    # keep line breaks and the indented flight list
+    lines = [line.replace("   ", "&nbsp;&nbsp;&nbsp;") for line in html.unescape(text).split("\n")]
+    return "  \n".join(lines) + "\n"
+
+
+def write_job_summary(message: str) -> None:
+    """When running on GitHub Actions, show the results on the run's summary page."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(to_markdown(message))
+
+
 def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, today: dt.date | None = None) -> int:
     today = today or dt.date.today()
     config = load_config(config_path)
@@ -146,15 +171,17 @@ def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, toda
     history = History(history_path)
     message = build_report(config, providers, history, today, record=not use_mock)
 
+    token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if dry_run:
         print(message)
-    else:
-        token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
-        if not token or not chat_id:
-            print("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set (or use --dry-run).", file=sys.stderr)
-            return 2
+    elif token and chat_id:
         send_telegram(token, chat_id, message)
         print("Alert sent to Telegram.")
+    else:
+        # no Telegram yet: show the results in the log and on the GitHub Actions run page
+        print("Telegram is not set up, so the alert was not sent. Results:\n")
+        print(to_plain(message))
+    write_job_summary(message)
     if not use_mock:
         history.save()
     return 0

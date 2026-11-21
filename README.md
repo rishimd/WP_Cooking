@@ -14,7 +14,9 @@ Prices come from Google Flights through [SerpApi](https://serpapi.com/google-fli
 ### 1. Get a SerpApi key
 Sign up at <https://serpapi.com>. The free plan includes 100 searches a month. Copy your key from the dashboard.
 
-### 2. Create a Telegram bot
+### 2. Create a Telegram bot (optional)
+You can skip Telegram at first. Without it, each daily run still finds the cheapest flights and saves the price history. To see the results, open **Actions → Daily flight check**, click the latest run, and read its summary. The trip page's **Latest prices** box shows them too. Add the two Telegram secrets whenever you want the alerts on your phone.
+
 1. In Telegram, message **@BotFather**, send `/newbot`, and follow the prompts. Copy the **bot token** it gives you.
 2. Open your new bot and send it any message (for example "hi").
 3. Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and find `"chat":{"id":123456789`. That number is your **chat ID**.
@@ -25,8 +27,8 @@ Go to your repo's **Settings → Secrets and variables → Actions → New repos
 | Name | Value |
 |---|---|
 | `SERPAPI_KEY` | your SerpApi key |
-| `TELEGRAM_BOT_TOKEN` | the token from BotFather |
-| `TELEGRAM_CHAT_ID` | your chat ID |
+| `TELEGRAM_BOT_TOKEN` | the token from BotFather (optional) |
+| `TELEGRAM_CHAT_ID` | your chat ID (optional) |
 
 ### 4. Enter your travel plan: the trip page
 

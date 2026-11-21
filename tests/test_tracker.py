@@ -202,3 +202,22 @@ def test_multi_city_message(tmp_path, monkeypatch, capsys):
     assert "Sun Jan 10: JFK → DEL" in out and "Thu Jan 28: BOM → JFK" in out
     assert "Checked 3 of 4" in out
     assert History(hist).data["Tour"]["daily"][0]["flights"][2] == {"from": "BOM", "to": "JFK", "date": "2027-01-28"}
+
+
+def test_runs_without_telegram(tmp_path, monkeypatch, capsys):
+    """No Telegram secrets: still succeeds, prints results, writes the Actions summary and history."""
+    cfg = tmp_path / "trips.yaml"
+    cfg.write_text("trips: [{name: Home, origin: JFK, destination: DEL, depart_dates: '2027-01-10', trip_length_days: [14]}]\n")
+    for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("SERPAPI_KEY", "x")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(SerpApiProvider, "search", lambda self, t, s, c: parse_response(SAMPLE, c))
+    hist = tmp_path / "h.json"
+    assert run(str(cfg), str(hist), dry_run=False, use_mock=False, today=TODAY) == 0
+    out = capsys.readouterr().out
+    assert "not set up" in out and "$640" in out and "<b>" not in out
+    md = summary.read_text()
+    assert "**$640**" in md and "[Open in Google Flights](https://" in md
+    assert History(hist).last_price("Home") == 640
