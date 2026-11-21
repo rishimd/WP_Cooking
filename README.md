@@ -28,15 +28,25 @@ Go to your repo's **Settings → Secrets and variables → Actions → New repos
 | `TELEGRAM_BOT_TOKEN` | the token from BotFather |
 | `TELEGRAM_CHAT_ID` | your chat ID |
 
-### 4. Enter your travel plan
-Open the trip editor on your computer:
+### 4. Enter your travel plan: the trip page
 
+There's one page for entering trips, with cities, dates, adults and children, cabin, stops and an alert price. You can use it two ways.
+
+**A. From your phone or any browser (hosted on GitHub Pages)**
+1. In the repo, open **Settings → Pages**. Under **Build and deployment**, choose **Deploy from a branch**, then select your default branch and the **/docs** folder, and save. After a minute, GitHub shows the page address, for example `https://<you>.github.io/<repo>/`.
+2. Make a token that only works on this repo: [GitHub → New fine-grained token](https://github.com/settings/personal-access-tokens/new). Under **Repository access**, choose **Only select repositories** and pick this repo. Set **Contents: Read and write** and **Actions: Read and write**.
+3. Open the page, paste the token, and click **Connect**. The token stays in that browser and is sent only to GitHub. Do this once per device.
+
+**Save trips** commits `trips.yaml` to the repo, so the next daily alert uses your changes. **Send me prices now** runs the daily check right away, and the Telegram message arrives in 1–2 minutes. The page also shows the latest prices found.
+
+> **Privacy:** GitHub Pages is free for **public** repos, but then anyone can read `trips.yaml` and `data/history.json`. To keep your trips private, keep this repo private and host the page somewhere else. It's one static file (`docs/index.html`) that holds no data, so you can put it in a separate public repo's Pages, or on any static host. Then enter this repo's name on the page. GitHub Pro can also serve Pages from a private repo.
+
+**B. On your computer, with no token needed**
 ```bash
 pip install -r requirements.txt
-python -m flight_tracker.ui        # opens http://127.0.0.1:8765 in your browser
+python -m flight_tracker.ui        # opens http://127.0.0.1:8765
 ```
-
-For each trip, pick the cities (type a city name or airport code), your dates (with optional flexibility), the number of adults and children, cabin, stops, and an optional alert price. Click **Save trips**, then commit and push `trips.yaml` so the daily job uses it. **Check prices now** shows a preview of the alert. It uses real prices if `SERPAPI_KEY` is set in your terminal and sample prices otherwise. Each check uses up searches.
+This saves to your local `trips.yaml`, which you then commit and push. Here **Check prices now** shows a preview of the alert on the page. It uses real prices if `SERPAPI_KEY` is set in your terminal and sample prices otherwise.
 
 You can also edit `trips.yaml` by hand. The comments in it explain the format.
 
@@ -59,7 +69,8 @@ Each depart-date × return-date combination costs one search. `max_searches_per_
 ```
 trips.yaml                  your travel plan
 flight_tracker/main.py      runs searches, builds the message, sends it
-flight_tracker/ui.py        local trip editor (ui.html is the page)
+docs/index.html             the trip page (GitHub Pages, or served locally)
+flight_tracker/ui.py        serves the trip page on your computer
 flight_tracker/config.py    parses trips and plans the day's searches
 flight_tracker/providers/   price sources (serpapi.py; add more here)
 flight_tracker/history.py   price history in data/history.json, committed by the workflow

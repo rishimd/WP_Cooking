@@ -107,28 +107,45 @@ def test_example_config_loads():
     assert load_config("trips.yaml").trips
 
 
-def test_ui_form_round_trip(tmp_path):
-    from flight_tracker.config import save_config
-    from flight_tracker.ui import from_form, to_form
-    form = {"name": "Family", "origin": "jfk, ewr", "destination": "DEL", "depart_from": "2027-01-10",
-            "depart_to": "2027-01-12", "trip_type": "round", "return_mode": "length", "length_days": "10, 14",
-            "adults": "2", "children": "1", "cabin": "economy", "max_stops": "", "target_price": ""}
-    raw = from_form(form)
-    assert raw["depart_dates"] == "2027-01-10..2027-01-12" and raw["trip_length_days"] == [10, 14]
-    assert "max_stops" not in raw and raw["children"] == 1
-    cfg = save_config(tmp_path / "t.yaml", "inr", 3, [raw])
-    assert cfg.trips[0].origin == "JFK,EWR" and len(cfg.trips[0].searches(TODAY)) == 6
-    back = to_form(raw)
-    assert back["depart_to"] == "2027-01-12" and back["return_mode"] == "length" and back["length_days"] == "10, 14"
 
-
-def test_ui_rejects_bad_input(tmp_path):
+def test_duplicate_names_rejected():
     import pytest
-    from flight_tracker.config import save_config
-    from flight_tracker.ui import from_form
-    with pytest.raises(ValueError):
-        from_form({"name": "X", "origin": "JFK", "destination": "DEL", "depart_from": "2027-01-10",
-                   "trip_type": "round", "return_mode": "dates"})  # no return date
-    with pytest.raises(ValueError):
-        save_config(tmp_path / "t.yaml", "USD", 3, [{"name": "X", "origin": "New York",
-                                                     "destination": "DEL", "depart_dates": "2027-01-10"}])
+    from flight_tracker.config import parse_config
+    trip = {"name": "A", "origin": "JFK", "destination": "DEL", "depart_dates": "2027-01-10"}
+    with pytest.raises(ValueError, match="different name"):
+        parse_config({"trips": [trip, dict(trip)]})
+    with pytest.raises(ValueError, match="3 letters"):
+        parse_config({"trips": [dict(trip, origin="New York")]})
+    assert parse_config({"trips": [dict(trip, origin="jfk, ewr")]}).trips[0].origin == "JFK,EWR"
+
+
+def test_local_server_validates_before_saving(tmp_path):
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from flight_tracker.ui import Handler
+
+    cfg = tmp_path / "trips.yaml"
+    cfg.write_text("trips: [{name: A, origin: JFK, destination: DEL, depart_dates: '2027-01-10'}]\n")
+    Handler.config_path, Handler.history_path = cfg, tmp_path / "h.json"
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def put(body):
+        req = urllib.request.Request(base + "/api/file", data=json.dumps(body).encode(), method="PUT",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            return urllib.request.urlopen(req).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    try:
+        assert put({"path": "trips.yaml", "text": "trips: [{name: B}]"}) == 400       # invalid: kept old file
+        assert "name: A" in cfg.read_text()
+        assert put({"path": "data/history.json", "text": "{}"}) == 403               # only trips.yaml writable
+        good = "trips: [{name: B, origin: SFO, destination: BOM, depart_dates: '2027-02-01'}]\n"
+        assert put({"path": "trips.yaml", "text": good}) == 200 and cfg.read_text() == good
+        r = json.load(urllib.request.urlopen(base + "/api/file?path=trips.yaml"))
+        assert r["text"] == good
+    finally:
+        srv.shutdown()

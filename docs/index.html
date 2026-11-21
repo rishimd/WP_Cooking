@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1b1f24; --muted: #5d6673; --line: #dde1e6;
+    --accent: #2457d6; --accent-text: #ffffff; --danger: #b42318; --ok: #1a7f37; --warn-bg: #fff6db;
+    --input: #ffffff; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --card: #1a1e24; --text: #e8eaed; --muted: #9aa3ad; --line: #2e343c;
+      --accent: #6d9bff; --accent-text: #0d1117; --danger: #ff7b72; --ok: #56d364; --warn-bg: #3a3014;
+      --input: #12161b; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: flex-start; gap: 12px; }
+  header > div { flex: 1; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .card-head input { font-weight: 600; font-size: 16px; flex: 1; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 560px) { .grid, .grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input, select { width: 100%; padding: 9px 10px; font: inherit; color: var(--text);
+                  background: var(--input); border: 1px solid var(--line); border-radius: 8px; }
+  input, select { display: block; min-width: 0; max-width: 100%; }
+  input[type=date] { -webkit-appearance: none; appearance: none; min-height: 40px; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 3px; min-height: 16px; }
+  .row { margin-top: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; color: var(--text); padding: 7px 12px; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
+  button { font: inherit; cursor: pointer; border-radius: 8px; padding: 9px 14px;
+           border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.link { border: 0; background: none; color: var(--danger); padding: 6px 8px; }
+  button.small { padding: 6px 10px; font-size: 13px; }
+  button:disabled { opacity: .6; cursor: default; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 18px 0; }
+  .muted { color: var(--muted); }
+  .status { font-size: 14px; flex-basis: 100%; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--danger); }
+  .note { background: var(--warn-bg); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .settings { display: flex; gap: 12px; flex-wrap: wrap; }
+  .settings > div { min-width: 140px; }
+  #result { white-space: pre-wrap; }
+  a { color: var(--accent); }
+  .pill { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px;
+          background: var(--warn-bg); margin-left: 6px; }
+  .price-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0;
+               border-top: 1px solid var(--line); }
+  .price-row:first-of-type { border-top: 0; padding-top: 0; }
+  .price { font-size: 20px; font-weight: 700; white-space: nowrap; }
+  .gate { text-align: left; }
+  ol { padding-left: 20px; margin: 8px 0; } li { margin: 4px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>✈️ Flight Tracker</h1>
+      <p class="sub">Add your trips. Every day you'll get a Telegram message with the cheapest flight for each one.</p>
+    </div>
+    <button id="gh-toggle" class="small" hidden>GitHub settings</button>
+  </header>
+
+  <!-- GitHub connection: only on the hosted page -->
+  <section id="gh-card" class="card gate" hidden>
+    <h2>Connect to your GitHub repo</h2>
+    <p class="muted" style="margin-top:0">This page saves your trips to <code>trips.yaml</code> in your repo. It needs a GitHub token that works only on that repo. The token stays in this browser and is sent only to GitHub.</p>
+    <details>
+      <summary>How to make the token (2 minutes)</summary>
+      <ol>
+        <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → New fine-grained token</a>.</li>
+        <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick your flight tracker repo.</li>
+        <li>Under <b>Permissions → Repository</b>, set <b>Contents: Read and write</b> and <b>Actions: Read and write</b>.</li>
+        <li>Click <b>Generate token</b>, copy it, and paste it below.</li>
+      </ol>
+    </details>
+    <div class="grid row">
+      <div><label for="gh-owner">GitHub user or org</label><input id="gh-owner" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div><label for="gh-repo">Repository</label><input id="gh-repo" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div><label for="gh-branch">Branch (optional)</label><input id="gh-branch" placeholder="default branch" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div><label for="gh-token">Token</label><input id="gh-token" type="password" placeholder="github_pat_…" autocomplete="off"></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="gh-connect">Connect</button>
+      <button id="gh-forget" class="link">Forget token on this device</button>
+      <span id="gh-status" class="status"></span>
+    </div>
+  </section>
+
+  <div id="app" hidden>
+    <section id="latest-card" class="card" hidden>
+      <h2>Latest prices</h2>
+      <div id="latest"></div>
+    </section>
+
+    <div id="trips"></div>
+    <button id="add">+ Add a trip</button>
+
+    <div class="card row">
+      <div class="settings">
+        <div><label for="currency">Currency</label>
+          <select id="currency">
+            <option>USD</option><option>INR</option><option>EUR</option><option>GBP</option>
+            <option>CAD</option><option>AUD</option><option>SGD</option><option>AED</option>
+          </select></div>
+        <div><label for="budget">Searches per day</label>
+          <input id="budget" type="number" min="1" max="50" value="3"></div>
+      </div>
+      <div class="hint">The SerpApi free plan allows about 3 searches a day. Each departure and return date pair is one search.</div>
+      <div id="budget-note" class="note row" hidden></div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="save">Save trips</button>
+      <button id="check">Check prices now</button>
+      <span id="status" class="status"></span>
+    </div>
+
+    <div id="result-card" class="card" hidden>
+      <strong>Preview of your alert</strong><span id="mock-pill" class="pill" hidden>sample prices: no SerpApi key set</span>
+      <div id="result" class="row"></div>
+    </div>
+  </div>
+</main>
+
+<datalist id="cities">
+  <option value="JFK,EWR,LGA">New York (all airports)</option>
+  <option value="LAX">Los Angeles</option>
+  <option value="SFO,OAK,SJC">San Francisco Bay Area</option>
+  <option value="ORD,MDW">Chicago</option>
+  <option value="IAD,DCA,BWI">Washington DC</option>
+  <option value="BOS">Boston</option>
+  <option value="SEA">Seattle</option>
+  <option value="DFW,DAL">Dallas</option>
+  <option value="IAH,HOU">Houston</option>
+  <option value="ATL">Atlanta</option>
+  <option value="MIA,FLL">Miami</option>
+  <option value="YYZ">Toronto</option>
+  <option value="YVR">Vancouver</option>
+  <option value="LHR,LGW,STN">London</option>
+  <option value="CDG,ORY">Paris</option>
+  <option value="FRA">Frankfurt</option>
+  <option value="AMS">Amsterdam</option>
+  <option value="DXB">Dubai</option>
+  <option value="DOH">Doha</option>
+  <option value="DEL">Delhi</option>
+  <option value="BOM">Mumbai</option>
+  <option value="BLR">Bengaluru</option>
+  <option value="HYD">Hyderabad</option>
+  <option value="MAA">Chennai</option>
+  <option value="CCU">Kolkata</option>
+  <option value="PNQ">Pune</option>
+  <option value="AMD">Ahmedabad</option>
+  <option value="NAG">Nagpur</option>
+  <option value="GOI,GOX">Goa</option>
+  <option value="COK">Kochi</option>
+  <option value="SIN">Singapore</option>
+  <option value="BKK">Bangkok</option>
+  <option value="KUL">Kuala Lumpur</option>
+  <option value="HKG">Hong Kong</option>
+  <option value="NRT,HND">Tokyo</option>
+  <option value="ICN">Seoul</option>
+  <option value="SYD">Sydney</option>
+  <option value="MEL">Melbourne</option>
+</datalist>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const CITY = {};
+document.querySelectorAll('#cities option').forEach(o => CITY[o.value] = o.textContent);
+const WORKFLOW = 'daily-flight-check.yml';
+const STORE_KEY = 'flightTracker.github';
+const YAML_HEADER = '# Your travel plan. Edit it in the trip page or by hand.\n' +
+  '# depart_dates / return_dates: a date, a range "YYYY-MM-DD..YYYY-MM-DD", or a list.\n' +
+  '# Leave out return_dates and trip_length_days for one-way. See README.md.\n\n';
+
+let state = { trips: [], currency: 'USD', max_searches_per_run: 3 };
+let backend = null;
+
+/* ---------- small helpers ---------- */
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } },
+  set(v) { try { localStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch {} },
+  clear() { try { localStorage.removeItem(STORE_KEY); } catch {} },
+};
+const b64encode = text => { const bytes = new TextEncoder().encode(text); let s = ''; bytes.forEach(b => s += String.fromCharCode(b)); return btoa(s); };
+const b64decode = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), c => c.charCodeAt(0)));
+const money = (n, cur) => {
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n); }
+  catch { return `${Math.round(n)} ${cur}`; }
+};
+const niceDate = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+
+/* ---------- trips.yaml <-> form ---------- */
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+function addDays(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function parseDates(v) {
+  if (v == null || v === '') return [];
+  const out = new Set();
+  for (const item of Array.isArray(v) ? v : [v]) {
+    const s = String(item).trim();
+    if (s.includes('..')) {
+      const [a, b] = s.split('..').map(x => x.trim());
+      if (!ISO.test(a) || !ISO.test(b) || b < a) throw new Error(`Bad date range "${s}"`);
+      for (let d = a; d <= b; d = addDays(d, 1)) out.add(d);
+    } else {
+      if (!ISO.test(s)) throw new Error(`Bad date "${s}" (use YYYY-MM-DD)`);
+      out.add(s);
+    }
+  }
+  return [...out].sort();
+}
+const range = (a, b) => !a ? null : (b && b !== a ? `${a}..${b}` : a);
+
+function toForm(raw) {
+  const dep = parseDates(raw.depart_dates), ret = parseDates(raw.return_dates);
+  let lengths = raw.trip_length_days ?? [];
+  if (!Array.isArray(lengths)) lengths = [lengths];
+  return {
+    name: raw.name ?? '', origin: raw.origin ?? '', destination: raw.destination ?? '',
+    depart_from: dep[0] ?? '', depart_to: dep.length > 1 ? dep[dep.length - 1] : '',
+    trip_type: ret.length || lengths.length ? 'round' : 'oneway',
+    return_mode: !ret.length && lengths.length ? 'length' : 'dates',
+    return_from: ret[0] ?? '', return_to: ret.length > 1 ? ret[ret.length - 1] : '',
+    length_days: lengths.join(', '),
+    adults: raw.adults ?? 1, children: raw.children ?? 0, cabin: raw.cabin ?? 'economy',
+    max_stops: raw.max_stops == null ? '' : String(raw.max_stops),
+    target_price: raw.target_price ?? '',
+  };
+}
+
+function fromForm(f, i) {
+  const origin = String(f.origin).trim().toUpperCase().replace(/\s+/g, '');
+  const destination = String(f.destination).trim().toUpperCase().replace(/\s+/g, '');
+  const name = String(f.name || `${origin} to ${destination}`).trim();
+  const label = name || `Trip ${i + 1}`;
+  const codes = /^[A-Z]{3}(,[A-Z]{3})*$/;
+  if (!codes.test(origin)) throw new Error(`${label}: "From" needs a city from the list or a 3-letter airport code`);
+  if (!codes.test(destination)) throw new Error(`${label}: "To" needs a city from the list or a 3-letter airport code`);
+  if (!f.depart_from) throw new Error(`${label}: pick a departure date`);
+  if (f.depart_to && f.depart_to < f.depart_from) throw new Error(`${label}: "flexible until" is before the departure date`);
+  const raw = { name, origin, destination, depart_dates: range(f.depart_from, f.depart_to) };
+  if (f.trip_type === 'round') {
+    if (f.return_mode === 'length') {
+      const days = String(f.length_days).split(',').map(x => x.trim()).filter(Boolean).map(Number);
+      if (!days.length || days.some(n => !Number.isInteger(n) || n < 1)) throw new Error(`${label}: enter days away as whole numbers, e.g. 10 or 10, 14`);
+      raw.trip_length_days = days;
+    } else {
+      if (!f.return_from) throw new Error(`${label}: pick a return date, or choose One-way`);
+      if (f.return_to && f.return_to < f.return_from) throw new Error(`${label}: return "flexible until" is before the return date`);
+      if ((f.return_to || f.return_from) <= f.depart_from) throw new Error(`${label}: the return date must be after departure`);
+      raw.return_dates = range(f.return_from, f.return_to);
+    }
+  }
+  raw.adults = Math.max(1, parseInt(f.adults, 10) || 1);
+  const kids = parseInt(f.children, 10) || 0;
+  if (kids > 0) raw.children = kids;
+  raw.cabin = f.cabin || 'economy';
+  if (f.max_stops !== '' && f.max_stops != null) raw.max_stops = Number(f.max_stops);
+  if (String(f.target_price).trim() !== '') raw.target_price = Number(f.target_price);
+  return raw;
+}
+
+function buildYaml() {
+  if (!state.trips.length) throw new Error('Add at least one trip');
+  const trips = state.trips.map(fromForm);
+  const names = trips.map(t => t.name);
+  if (new Set(names).size !== names.length) throw new Error('Each trip needs a different name');
+  const data = { currency: $('#currency').value, max_searches_per_run: Number($('#budget').value) || 3, trips };
+  return YAML_HEADER + jsyaml.dump(data, { lineWidth: -1, noRefs: true });
+}
+
+/* ---------- backends ---------- */
+const localBackend = {
+  mode: 'local',
+  async read(path) {
+    const r = await fetch('/api/file?path=' + encodeURIComponent(path));
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error('Could not read ' + path);
+    return (await r.json()).text;
+  },
+  async write(path, text) {
+    const r = await fetch('/api/file', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, text }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Save failed');
+  },
+  async check() {
+    const r = await fetch('/api/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Check failed');
+    return d;
+  },
+};
+
+function githubBackend({ owner, repo, branch, token }) {
+  const shas = {};
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  async function api(path, opts = {}) {
+    const r = await fetch('https://api.github.com' + path, { ...opts, headers: {
+      Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + token,
+      'X-GitHub-Api-Version': '2022-11-28', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+    if (r.status === 401) throw new Error('GitHub says the token is invalid or expired. Paste a new one in GitHub settings.');
+    return r;
+  }
+  return {
+    mode: 'github', owner, repo,
+    branch,
+    async init() {
+      const r = await api(base);
+      if (r.status === 404 || r.status === 403) throw new Error(`The token can't see ${owner}/${repo}. Check the name and that the token includes this repo.`);
+      if (!r.ok) throw new Error(`GitHub error ${r.status}`);
+      if (!this.branch) this.branch = (await r.json()).default_branch;
+    },
+    async read(path) {
+      const r = await api(`${base}/contents/${path}?ref=${encodeURIComponent(this.branch)}`);
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`Couldn't read ${path} (GitHub error ${r.status})`);
+      const d = await r.json();
+      shas[path] = d.sha;
+      return b64decode(d.content);
+    },
+    async write(path, text) {
+      const r = await api(`${base}/contents/${path}`, { method: 'PUT', body: JSON.stringify({
+        message: 'Update trips from the trip page', content: b64encode(text), branch: this.branch,
+        ...(shas[path] ? { sha: shas[path] } : {}) }) });
+      if (r.status === 409 || r.status === 422) throw new Error('trips.yaml changed on GitHub since this page loaded. Reload the page and try again.');
+      if (r.status === 403 || r.status === 404) throw new Error('The token can read but not write. Give it "Contents: Read and write".');
+      if (!r.ok) throw new Error(`Save failed (GitHub error ${r.status})`);
+      shas[path] = (await r.json()).content.sha;
+    },
+    async check() {
+      const r = await api(`${base}/actions/workflows/${WORKFLOW}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: this.branch }) });
+      if (r.status === 404) throw new Error(`Couldn't find the daily workflow on "${this.branch}". It must be on your repo's default branch.`);
+      if (r.status === 403) throw new Error('The token needs "Actions: Read and write" to run the check.');
+      if (!r.ok) throw new Error(`Couldn't start the check (GitHub error ${r.status})`);
+      return { dispatched: true };
+    },
+  };
+}
+
+/* ---------- rendering ---------- */
+const blank = () => ({ name: '', origin: '', destination: '', depart_from: '', depart_to: '',
+  trip_type: 'round', return_mode: 'dates', return_from: '', return_to: '', length_days: '',
+  adults: 1, children: 0, cabin: 'economy', max_stops: '1', target_price: '' });
+
+const days = (a, b) => (!a ? 0 : !b || b <= a ? 1 : Math.round((new Date(b) - new Date(a)) / 864e5) + 1);
+const combos = t => {
+  const d = days(t.depart_from, t.depart_to);
+  if (t.trip_type === 'oneway') return d;
+  if (t.return_mode === 'length') return d * String(t.length_days).split(',').filter(x => x.trim()).length;
+  return d * days(t.return_from, t.return_to);
+};
+const comboText = t => { const n = combos(t); return `${n} date combination${n === 1 ? '' : 's'}`; };
+const cityHint = code => CITY[String(code).toUpperCase()] || (code ? 'Airport code, e.g. JFK' : 'Type a city or 3-letter airport code');
+
+function field(i, key, label, attrs = '') {
+  return `<div><label for="f${i}${key}">${label}</label>
+    <input id="f${i}${key}" data-i="${i}" data-k="${key}" value="${esc(state.trips[i][key])}" ${attrs}></div>`;
+}
+function select(i, key, label, options) {
+  const cur = String(state.trips[i][key]);
+  return `<div><label for="f${i}${key}">${label}</label><select id="f${i}${key}" data-i="${i}" data-k="${key}">
+    ${options.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+}
+
+function render() {
+  $('#trips').innerHTML = state.trips.map((t, i) => {
+    const round = t.trip_type === 'round', byLen = t.return_mode === 'length';
+    return `<section class="card">
+      <div class="card-head">
+        <input data-i="${i}" data-k="name" value="${esc(t.name)}" placeholder="Trip name (e.g. Diwali home trip)" aria-label="Trip name">
+        <button class="link" data-del="${i}">Remove</button>
+      </div>
+      <div class="grid">
+        <div><label for="f${i}origin">From</label>
+          <input id="f${i}origin" list="cities" data-i="${i}" data-k="origin" value="${esc(t.origin)}" placeholder="City or airport" autocomplete="off">
+          <div class="hint">${esc(cityHint(t.origin))}</div></div>
+        <div><label for="f${i}destination">To</label>
+          <input id="f${i}destination" list="cities" data-i="${i}" data-k="destination" value="${esc(t.destination)}" placeholder="City or airport" autocomplete="off">
+          <div class="hint">${esc(cityHint(t.destination))}</div></div>
+      </div>
+      <div class="row seg" role="group" aria-label="Trip type">
+        <button data-i="${i}" data-set="trip_type" data-v="round" class="${round ? 'on' : ''}">Round trip</button>
+        <button data-i="${i}" data-set="trip_type" data-v="oneway" class="${round ? '' : 'on'}">One-way</button>
+      </div>
+      <div class="grid row">
+        ${field(i, 'depart_from', 'Depart on', 'type="date"')}
+        ${field(i, 'depart_to', 'Flexible until (optional)', 'type="date"')}
+      </div>
+      ${round ? `
+      <div class="row seg" role="group" aria-label="Return by">
+        <button data-i="${i}" data-set="return_mode" data-v="dates" class="${byLen ? '' : 'on'}">Return date</button>
+        <button data-i="${i}" data-set="return_mode" data-v="length" class="${byLen ? 'on' : ''}">Days away</button>
+      </div>
+      <div class="grid row">
+        ${byLen ? field(i, 'length_days', 'Days away (e.g. 10 or 10, 14)', 'inputmode="numeric"') :
+          field(i, 'return_from', 'Return on', 'type="date"') + field(i, 'return_to', 'Flexible until (optional)', 'type="date"')}
+      </div>` : ''}
+      <div class="grid three row">
+        ${field(i, 'adults', 'Adults', 'type="number" min="1" max="9"')}
+        ${field(i, 'children', 'Children (2–11)', 'type="number" min="0" max="8"')}
+        ${select(i, 'cabin', 'Cabin', [['economy','Economy'],['premium_economy','Premium economy'],['business','Business'],['first','First']])}
+        ${select(i, 'max_stops', 'Stops', [['','Any'],['0','Nonstop only'],['1','Up to 1 stop'],['2','Up to 2 stops']])}
+        ${field(i, 'target_price', 'Alert me below (optional)', 'type="number" min="0" placeholder="e.g. 900"')}
+      </div>
+      <div class="hint row combo">${comboText(t)}</div>
+    </section>`;
+  }).join('') || '<p class="muted">No trips yet. Add one below.</p>';
+  updateBudget();
+}
+
+function updateBudget() {
+  const total = state.trips.reduce((n, t) => n + combos(t), 0);
+  const per = Number($('#budget').value) || 3;
+  const note = $('#budget-note');
+  note.hidden = total <= per;
+  note.textContent = `Your trips have ${total} date combinations. At ${per} a day, the tracker checks a different set each day and covers all of them every ${Math.ceil(total / per)} days.`;
+}
+
+function renderLatest(historyText) {
+  let hist = {};
+  try { hist = historyText ? JSON.parse(historyText) : {}; } catch {}
+  const rows = state.trips.map(t => {
+    const h = hist[t.name]; const last = h?.daily?.[h.daily.length - 1];
+    if (!last) return '';
+    const low = h.lowest_ever;
+    const when = `${niceDate(last.depart)}${last.return ? ' → ' + niceDate(last.return) : ' (one-way)'}`;
+    return `<div class="price-row"><div><b>${esc(t.name)}</b><div class="muted">${esc(when)} · ${esc((last.airlines || []).join(', '))}</div>
+      <div class="hint">checked ${esc(niceDate(last.date))}${low ? ` · lowest seen ${esc(money(low.price, state.currency))}` : ''}</div></div>
+      <div class="price">${esc(money(last.price, state.currency))}</div></div>`;
+  }).join('');
+  $('#latest').innerHTML = rows;
+  $('#latest-card').hidden = !rows;
+}
+
+/* ---------- events ---------- */
+$('#trips').addEventListener('input', e => {
+  const { i, k } = e.target.dataset;
+  if (i === undefined || !k) return;
+  let v = e.target.value;
+  if (k === 'origin' || k === 'destination') {
+    v = v.toUpperCase();
+    e.target.value = v;
+    e.target.parentElement.querySelector('.hint').textContent = cityHint(v);
+  }
+  state.trips[i][k] = v;
+  e.target.closest('section').querySelector('.combo').textContent = comboText(state.trips[i]);
+  updateBudget();
+});
+$('#trips').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.del !== undefined) { state.trips.splice(Number(b.dataset.del), 1); render(); }
+  if (b.dataset.set) { state.trips[b.dataset.i][b.dataset.set] = b.dataset.v; render(); }
+});
+$('#add').onclick = () => { state.trips.push(blank()); render(); };
+$('#budget').oninput = updateBudget;
+
+function status(msg, kind = '', el = '#status') { const s = $(el); s.textContent = msg; s.className = 'status ' + kind; }
+
+async function save() {
+  status('Saving…');
+  await backend.write('trips.yaml', buildYaml());
+  const n = state.trips.length;
+  status(backend.mode === 'github'
+    ? `Saved ${n} trip${n === 1 ? '' : 's'} to GitHub. Tomorrow's alert will use them.`
+    : `Saved ${n} trip${n === 1 ? '' : 's'} to trips.yaml. Commit and push it so the daily alert uses it.`, 'ok');
+}
+$('#save').onclick = () => save().catch(e => status(e.message, 'err'));
+$('#check').onclick = async () => {
+  const btn = $('#check'); btn.disabled = true;
+  try {
+    await save();
+    status(backend.mode === 'github' ? 'Starting the check…' : 'Searching flights…');
+    const res = await backend.check();
+    if (res.dispatched) {
+      status('Check started. Your Telegram message should arrive in 1–2 minutes.', 'ok');
+    } else {
+      $('#result').innerHTML = res.message;   // built server-side with escaped values
+      $('#mock-pill').hidden = !res.mock;
+      $('#result-card').hidden = false;
+      status('Done.', 'ok');
+    }
+  } catch (e) { status(e.message, 'err'); }
+  btn.disabled = false;
+};
+
+async function loadAll() {
+  const text = await backend.read('trips.yaml');
+  const data = text ? (jsyaml.load(text, { schema: jsyaml.CORE_SCHEMA }) || {}) : {};
+  state = { currency: data.currency || 'USD', max_searches_per_run: data.max_searches_per_run || 3,
+            trips: (data.trips || []).map(toForm) };
+  $('#currency').value = state.currency;
+  $('#budget').value = state.max_searches_per_run;
+  if (!state.trips.length) state.trips.push(blank());
+  render();
+  renderLatest(await backend.read('data/history.json').catch(() => null));
+  $('#app').hidden = false;
+}
+
+/* ---------- GitHub connection ---------- */
+function prefillFromUrl(saved) {
+  // https://<owner>.github.io/<repo>/ → owner, repo
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
+  const repoFromPath = location.pathname.split('/').filter(Boolean)[0];
+  $('#gh-owner').value = saved.owner || (m ? m[1] : '');
+  $('#gh-repo').value = saved.repo || (m && repoFromPath ? repoFromPath : '');
+  $('#gh-branch').value = saved.branch || '';
+  $('#gh-token').value = saved.token || '';
+}
+
+async function connect(cfg) {
+  status('Connecting…', '', '#gh-status');
+  const gh = githubBackend(cfg);
+  await gh.init();
+  backend = gh;
+  store.set(cfg);
+  await loadAll();
+  status(`Connected to ${cfg.owner}/${cfg.repo} (${gh.branch}).`, 'ok', '#gh-status');
+  $('#gh-card').hidden = true;
+  $('#gh-toggle').hidden = false;
+  $('#check').textContent = 'Send me prices now';
+}
+
+$('#gh-connect').onclick = () => {
+  const cfg = { owner: $('#gh-owner').value.trim(), repo: $('#gh-repo').value.trim(),
+                branch: $('#gh-branch').value.trim(), token: $('#gh-token').value.trim() };
+  if (!cfg.owner || !cfg.repo || !cfg.token) return status('Fill in user, repository and token.', 'err', '#gh-status');
+  connect(cfg).catch(e => status(e.message, 'err', '#gh-status'));
+};
+$('#gh-forget').onclick = () => { store.clear(); $('#gh-token').value = ''; $('#app').hidden = true; status('Token removed from this device.', 'ok', '#gh-status'); };
+$('#gh-toggle').onclick = () => { $('#gh-card').hidden = !$('#gh-card').hidden; };
+
+/* ---------- start ---------- */
+(async () => {
+  if (typeof jsyaml === 'undefined') {
+    document.querySelector('main').insertAdjacentHTML('beforeend', '<p class="note">Couldn\'t load a required script. Check your connection and reload.</p>');
+    return;
+  }
+  let local = false;
+  try { const r = await fetch('/api/mode'); local = r.ok && (await r.json()).mode === 'local'; } catch {}
+  if (local) {
+    backend = localBackend;
+    try { await loadAll(); } catch (e) { status(e.message, 'err'); $('#app').hidden = false; }
+    return;
+  }
+  const saved = store.get();
+  prefillFromUrl(saved);
+  $('#gh-card').hidden = false;
+  if (saved.token && saved.owner && saved.repo) connect(saved).catch(e => status(e.message, 'err', '#gh-status'));
+})();
+</script>
+</body>
+</html>

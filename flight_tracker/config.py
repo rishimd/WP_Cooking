@@ -118,16 +118,25 @@ def _parse_trip(raw: dict) -> Trip:
     )
 
 
-def load_config(path: str | Path) -> Config:
-    data = yaml.safe_load(Path(path).read_text()) or {}
+def parse_config(data: dict | None, source: str = "trips.yaml") -> Config:
+    data = data or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{source} should be a mapping with a 'trips' list")
     trips = [_parse_trip(t) for t in data.get("trips") or []]
     if not trips:
-        raise ValueError(f"No trips defined in {path}")
+        raise ValueError(f"No trips defined in {source}")
+    names = [t.name for t in trips]
+    if len(set(names)) != len(names):
+        raise ValueError("Each trip needs a different name")
     return Config(
         currency=str(data.get("currency", "USD")).upper(),
         max_searches_per_run=int(data.get("max_searches_per_run", 3)),
         trips=trips,
     )
+
+
+def load_config(path: str | Path) -> Config:
+    return parse_config(yaml.safe_load(Path(path).read_text()), str(path))
 
 
 def plan_searches(config: Config, today: dt.date) -> list[tuple[Trip, Search]]:
@@ -142,20 +151,3 @@ def plan_searches(config: Config, today: dt.date) -> list[tuple[Trip, Search]]:
     order = {id(p): i for i, p in enumerate(all_pairs)}
     return sorted(rotated, key=lambda p: order[id(p)])
 
-
-HEADER = """\
-# Your travel plan. Edit it in the web page (python -m flight_tracker.ui) or by hand.
-# depart_dates / return_dates: a date, a range "YYYY-MM-DD..YYYY-MM-DD", or a list.
-# Leave out return_dates and trip_length_days for one-way. See README.md.
-"""
-
-
-def save_config(path: str | Path, currency: str, max_searches_per_run: int, trips: list[dict]) -> Config:
-    """Validate raw trip dicts and write them to trips.yaml. Raises ValueError if invalid."""
-    data = {"currency": currency.upper(), "max_searches_per_run": int(max_searches_per_run), "trips": trips}
-    parsed = Config(data["currency"], data["max_searches_per_run"], [_parse_trip(t) for t in trips])
-    names = [t.name for t in parsed.trips]
-    if len(set(names)) != len(names):
-        raise ValueError("Each trip needs a different name")
-    Path(path).write_text(HEADER + "\n" + yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
-    return parsed
