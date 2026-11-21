@@ -105,3 +105,30 @@ trips:
 
 def test_example_config_loads():
     assert load_config("trips.yaml").trips
+
+
+def test_ui_form_round_trip(tmp_path):
+    from flight_tracker.config import save_config
+    from flight_tracker.ui import from_form, to_form
+    form = {"name": "Family", "origin": "jfk, ewr", "destination": "DEL", "depart_from": "2027-01-10",
+            "depart_to": "2027-01-12", "trip_type": "round", "return_mode": "length", "length_days": "10, 14",
+            "adults": "2", "children": "1", "cabin": "economy", "max_stops": "", "target_price": ""}
+    raw = from_form(form)
+    assert raw["depart_dates"] == "2027-01-10..2027-01-12" and raw["trip_length_days"] == [10, 14]
+    assert "max_stops" not in raw and raw["children"] == 1
+    cfg = save_config(tmp_path / "t.yaml", "inr", 3, [raw])
+    assert cfg.trips[0].origin == "JFK,EWR" and len(cfg.trips[0].searches(TODAY)) == 6
+    back = to_form(raw)
+    assert back["depart_to"] == "2027-01-12" and back["return_mode"] == "length" and back["length_days"] == "10, 14"
+
+
+def test_ui_rejects_bad_input(tmp_path):
+    import pytest
+    from flight_tracker.config import save_config
+    from flight_tracker.ui import from_form
+    with pytest.raises(ValueError):
+        from_form({"name": "X", "origin": "JFK", "destination": "DEL", "depart_from": "2027-01-10",
+                   "trip_type": "round", "return_mode": "dates"})  # no return date
+    with pytest.raises(ValueError):
+        save_config(tmp_path / "t.yaml", "USD", 3, [{"name": "X", "origin": "New York",
+                                                     "destination": "DEL", "depart_dates": "2027-01-10"}])

@@ -29,6 +29,7 @@ class SerpApiProvider(Provider):
             "type": 2 if search.ret is None else 1,
             "currency": currency,
             "adults": trip.adults,
+            "children": trip.children,
             "travel_class": TRAVEL_CLASS[trip.cabin],
             "stops": STOPS.get(trip.max_stops, 0) if trip.max_stops is not None else 0,
             "hl": "en",

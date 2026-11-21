@@ -13,10 +13,10 @@ import html
 import os
 import sys
 
-from .config import Search, Trip, load_config, plan_searches
+from .config import Config, Search, Trip, load_config, plan_searches
 from .history import History
 from .notify import send_telegram
-from .providers import Offer, available_providers
+from .providers import Offer, Provider, available_providers
 
 
 def fmt_money(amount: float, currency: str) -> str:
@@ -78,15 +78,9 @@ def trip_block(trip: Trip, search: Search, offer: Offer | None, history: History
     return "\n".join(lines)
 
 
-def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, today: dt.date | None = None) -> int:
-    today = today or dt.date.today()
-    config = load_config(config_path)
-    providers = available_providers(use_mock)
-    if not providers:
-        print("No flight source configured. Set SERPAPI_KEY (or use --mock).", file=sys.stderr)
-        return 2
-
-    history = History(history_path)
+def build_report(config: Config, providers: list[Provider], history: History,
+                 today: dt.date, record: bool = True) -> str:
+    """Search today's planned dates, update history (if record), and return the HTML message."""
     planned = plan_searches(config, today)
 
     # cheapest offer per trip across every date combination and provider checked today
@@ -113,12 +107,13 @@ def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, toda
             continue
         if trip.name in best:
             search, offer = best[trip.name]
-        elif any(t is trip for t, _ in planned):
-            search, offer = planned[[t for t, _ in planned].index(trip)][1], None
         else:
-            continue  # not in today's rotation and nothing to report
+            todays = [s for t, s in planned if t is trip]
+            if not todays:
+                continue  # not in today's rotation and nothing to report
+            search, offer = todays[0], None
         blocks.append(trip_block(trip, search, offer, history, config.currency, errors.get(trip.name, [])))
-        if offer is not None:
+        if offer is not None and record:
             history.record(trip.name, today.isoformat(), offer.price, {
                 "depart": search.depart.isoformat(),
                 "return": search.ret.isoformat() if search.ret else None,
@@ -128,7 +123,19 @@ def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, toda
 
     total = sum(len(t.searches(today)) for t in config.trips)
     footer = f"<i>Checked {len(planned)} of {total} date combinations today.</i>"
-    message = f"✈️ <b>Daily flight check: {today.strftime('%b %-d, %Y')}</b>\n\n" + "\n\n".join(blocks) + f"\n\n{footer}"
+    return f"✈️ <b>Daily flight check: {today.strftime('%b %-d, %Y')}</b>\n\n" + "\n\n".join(blocks) + f"\n\n{footer}"
+
+
+def run(config_path: str, history_path: str, dry_run: bool, use_mock: bool, today: dt.date | None = None) -> int:
+    today = today or dt.date.today()
+    config = load_config(config_path)
+    providers = available_providers(use_mock)
+    if not providers:
+        print("No flight source configured. Set SERPAPI_KEY (or use --mock).", file=sys.stderr)
+        return 2
+
+    history = History(history_path)
+    message = build_report(config, providers, history, today, record=not use_mock)
 
     if dry_run:
         print(message)

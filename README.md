@@ -29,7 +29,16 @@ Go to your repo's **Settings → Secrets and variables → Actions → New repos
 | `TELEGRAM_CHAT_ID` | your chat ID |
 
 ### 4. Enter your travel plan
-Edit `trips.yaml`. Each trip takes origin and destination airport codes, flexible departure dates, and either return dates or a trip length. See the comments in the file for details.
+Open the trip editor on your computer:
+
+```bash
+pip install -r requirements.txt
+python -m flight_tracker.ui        # opens http://127.0.0.1:8765 in your browser
+```
+
+For each trip, pick the cities (type a city name or airport code), your dates (with optional flexibility), the number of adults and children, cabin, stops, and an optional alert price. Click **Save trips**, then commit and push `trips.yaml` so the daily job uses it. **Check prices now** shows a preview of the alert. It uses real prices if `SERPAPI_KEY` is set in your terminal and sample prices otherwise. Each check uses up searches.
+
+You can also edit `trips.yaml` by hand. The comments in it explain the format.
 
 ### 5. Turn it on
 The workflow in `.github/workflows/daily-flight-check.yml` runs every day at 03:17 UTC. Change the `cron` line to use a different time. GitHub only runs scheduled workflows from the **default branch**, so merge this branch into it. To test right away, open **Actions → Daily flight check → Run workflow**.
@@ -50,6 +59,7 @@ Each depart-date × return-date combination costs one search. `max_searches_per_
 ```
 trips.yaml                  your travel plan
 flight_tracker/main.py      runs searches, builds the message, sends it
+flight_tracker/ui.py        local trip editor (ui.html is the page)
 flight_tracker/config.py    parses trips and plans the day's searches
 flight_tracker/providers/   price sources (serpapi.py; add more here)
 flight_tracker/history.py   price history in data/history.json, committed by the workflow
