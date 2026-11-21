@@ -18,6 +18,8 @@
 
 currency: USD
 max_searches_per_run: 3      # keep at 3 or less on SerpApi's free plan
+booking_link: deals          # deals: link to the exact flight on a new low or under target
+                             # (1-3 extra searches); always: every day; off: search link only
 
 trips:
   - name: "Example: India multi-city"     # replace with your real plan

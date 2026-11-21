@@ -75,11 +75,15 @@ class Trip:
         return out
 
 
+BOOKING_LINK_MODES = ("deals", "always", "off")
+
+
 @dataclass
 class Config:
     currency: str
     max_searches_per_run: int
     trips: list[Trip]
+    booking_link: str = "deals"  # when to spend extra searches on an exact-flight booking link
 
 
 def _parse_dates(value) -> list[dt.date]:
@@ -168,10 +172,14 @@ def parse_config(data: dict | None, source: str = "trips.yaml") -> Config:
     names = [t.name for t in trips]
     if len(set(names)) != len(names):
         raise ValueError("Each trip needs a different name")
+    booking_link = str(data.get("booking_link", "deals")).lower()
+    if booking_link not in BOOKING_LINK_MODES:
+        raise ValueError(f"booking_link must be one of {BOOKING_LINK_MODES}")
     return Config(
         currency=str(data.get("currency", "USD")).upper(),
         max_searches_per_run=int(data.get("max_searches_per_run", 3)),
         trips=trips,
+        booking_link=booking_link,
     )
 
 

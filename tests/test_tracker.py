@@ -219,5 +219,90 @@ def test_runs_without_telegram(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "not set up" in out and "$640" in out and "<b>" not in out
     md = summary.read_text()
-    assert "**$640**" in md and "[Open in Google Flights](https://" in md
+    assert "**$640**" in md and "[Open this search on Google Flights](https://" in md
     assert History(hist).last_price("Home") == 640
+
+
+class FakeSerpApi:
+    """Stands in for requests.Session: answers by which token the request carries."""
+    def __init__(self, pages):
+        self.pages, self.calls = pages, []
+
+    def get(self, url, params, timeout):
+        key = params.get("booking_token") or params.get("departure_token") or "search"
+        self.calls.append(key)
+        body = json.dumps(self.pages[key]).encode()
+        return type("R", (), {"status_code": 200, "content": body, "json": lambda self: json.loads(body),
+                              "text": body.decode()})()
+
+
+def flights(price, stops=0, **tokens):
+    return {"price": price, "layovers": [{}] * stops, "flights": [{"airline": "X", "flight_number": "X 1"}], **tokens}
+
+
+def test_round_trip_follows_tokens_to_exact_booking_page():
+    trip = make_trip(trip_length_days=[14], max_stops=1)
+    search = trip.searches(TODAY)[0]
+    fake = FakeSerpApi({
+        "search": {"search_metadata": {"google_flights_url": "https://g/search"},
+                   "other_flights": [flights(700, departure_token="dep1")]},
+        # return flights: the cheapest has 2 stops (over max_stops), so the $520 one is chosen
+        "dep1": {"other_flights": [flights(500, stops=2, booking_token="nope"), flights(520, booking_token="book1")]},
+        "book1": {"search_metadata": {"google_flights_url": "https://g/booking/exact"}},
+    })
+    api = SerpApiProvider("k", session=fake)
+    offer = api.search(trip, search, "USD")[0]
+    assert offer.link == "https://g/search" and offer.tokens == {"departure_token": "dep1"}
+    assert api.booking_link(trip, search, offer, "USD") == "https://g/booking/exact"
+    assert fake.calls == ["search", "dep1", "book1"]
+
+
+def test_multi_city_needs_one_hop_per_later_flight():
+    from flight_tracker.config import parse_config
+    trip = parse_config({"trips": [MULTI]}).trips[0]       # 3 flights -> 2 hops + booking
+    search = trip.searches(TODAY)[0]
+    fake = FakeSerpApi({
+        "search": {"other_flights": [flights(900, departure_token="a")]},
+        "a": {"other_flights": [flights(900, departure_token="b")]},
+        "b": {"other_flights": [flights(900, booking_token="c")]},
+        "c": {"search_metadata": {"google_flights_url": "https://g/booking/multi"}},
+    })
+    api = SerpApiProvider("k", session=fake)
+    offer = api.search(trip, search, "USD")[0]
+    assert api.booking_link(trip, search, offer, "USD") == "https://g/booking/multi"
+    assert fake.calls == ["search", "a", "b", "c"]
+
+
+def test_fallback_search_link_when_serpapi_gives_none():
+    from urllib.parse import parse_qs, urlparse
+    trip = make_trip(origin="JFK,EWR", trip_length_days=[14])
+    fake = FakeSerpApi({"search": {"other_flights": [flights(700)]}})
+    offer = SerpApiProvider("k", session=fake).search(trip, trip.searches(TODAY)[0], "USD")[0]
+    q = parse_qs(urlparse(offer.link).query)["q"][0]
+    assert q == "Flights from JFK to DEL on 2027-01-10 through 2027-01-24"
+
+
+def test_booking_link_only_on_good_days(tmp_path, monkeypatch, capsys):
+    """Default 'deals': exact link on a new low or under target; the search link otherwise."""
+    cfg = tmp_path / "trips.yaml"
+    cfg.write_text("trips: [{name: Home, origin: JFK, destination: DEL, depart_dates: '2027-01-10', "
+                   "trip_length_days: [14], target_price: 600}]\n")
+    monkeypatch.setenv("SERPAPI_KEY", "x")
+    hist = tmp_path / "h.json"
+    price = {"v": 700}
+    monkeypatch.setattr(SerpApiProvider, "search", lambda self, t, s, c: [
+        type(parse_response(SAMPLE, c)[0])(price=price["v"], currency=c, airlines=["X"], flight_numbers=[],
+                                           stops=0, duration_minutes=None, depart_time=None, source="g",
+                                           link="https://g/search")])
+    asked = []
+    monkeypatch.setattr(SerpApiProvider, "booking_link", lambda self, t, s, o, c: asked.append(1) or "https://g/exact")
+
+    def day(n, p):
+        price["v"] = p
+        run(str(cfg), str(hist), dry_run=True, use_mock=False, today=TODAY + dt.timedelta(days=n))
+        return capsys.readouterr().out
+    assert "Book this exact flight" in day(0, 700)          # first price seen = new low
+    out = day(1, 750)                                        # pricier, above target: no extra searches
+    assert "Open this search on Google Flights" in out and len(asked) == 1
+    assert "Book this exact flight" in day(2, 590)           # under target
+    assert len(asked) == 2

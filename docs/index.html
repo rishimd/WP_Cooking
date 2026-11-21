@@ -328,7 +328,8 @@ function buildYaml() {
   const trips = state.trips.map(fromForm);
   const names = trips.map(t => t.name);
   if (new Set(names).size !== names.length) throw new Error('Each trip needs a different name');
-  const data = { currency: $('#currency').value, max_searches_per_run: Number($('#budget').value) || 3, trips };
+  // keep settings this page doesn't edit (e.g. booking_link)
+  const data = { ...state.other, currency: $('#currency').value, max_searches_per_run: Number($('#budget').value) || 3, trips };
   return YAML_HEADER + jsyaml.dump(data, { lineWidth: -1, noRefs: true });
 }
 
@@ -606,8 +607,9 @@ $('#check').onclick = async () => {
 async function loadAll() {
   const text = await backend.read('trips.yaml');
   const data = text ? (jsyaml.load(text, { schema: jsyaml.CORE_SCHEMA }) || {}) : {};
-  state = { currency: data.currency || 'USD', max_searches_per_run: data.max_searches_per_run || 3,
-            trips: (data.trips || []).map(toForm) };
+  const { currency, max_searches_per_run, trips, ...other } = data;
+  state = { currency: currency || 'USD', max_searches_per_run: max_searches_per_run || 3,
+            trips: (trips || []).map(toForm), other };
   $('#currency').value = state.currency;
   $('#budget').value = state.max_searches_per_run;
   if (!state.trips.length) state.trips.push(blank());

@@ -81,9 +81,24 @@ def trip_block(trip: Trip, search: Search, offer: Offer | None, history: History
 
     if trip.target_price is not None and offer.price <= trip.target_price:
         lines.append(f"🎯 <b>Below your target of {fmt_money(trip.target_price, currency)}. Good time to book.</b>")
-    if offer.link:
-        lines.append(f'<a href="{html.escape(offer.link)}">Open in Google Flights</a>')
+    if offer.link and offer.exact_link:
+        lines.append(f'👉 <a href="{html.escape(offer.link)}">Book this exact flight on Google Flights</a>')
+    elif offer.link:
+        lines.append(f'🔗 <a href="{html.escape(offer.link)}">Open this search on Google Flights</a> '
+                     f'(route, dates and travelers filled in)')
     return "\n".join(lines)
+
+
+def wants_booking_link(config: Config, trip: Trip, offer: Offer, history: History) -> bool:
+    """Exact-flight links cost extra searches, so by default only fetch them on a good day."""
+    if config.booking_link == "always":
+        return True
+    if config.booking_link == "off":
+        return False
+    lowest = history.lowest_ever(trip.name)
+    new_low = lowest is None or offer.price < lowest["price"]
+    under_target = trip.target_price is not None and offer.price <= trip.target_price
+    return new_low or under_target
 
 
 def build_report(config: Config, providers: list[Provider], history: History,
@@ -92,7 +107,7 @@ def build_report(config: Config, providers: list[Provider], history: History,
     planned = plan_searches(config, today)
 
     # cheapest offer per trip across every date combination and provider checked today
-    best: dict[str, tuple[Search, Offer]] = {}
+    best: dict[str, tuple[Search, Offer, Provider]] = {}
     errors: dict[str, list[str]] = {}
     for trip, search in planned:
         for provider in providers:
@@ -106,7 +121,7 @@ def build_report(config: Config, providers: list[Provider], history: History,
                 if trip.max_stops is not None and offer.stops > trip.max_stops:
                     continue
                 if trip.name not in best or offer.price < best[trip.name][1].price:
-                    best[trip.name] = (search, offer)
+                    best[trip.name] = (search, offer, provider)
 
     blocks = []
     for trip in config.trips:
@@ -114,7 +129,14 @@ def build_report(config: Config, providers: list[Provider], history: History,
             blocks.append(f"<b>{html.escape(trip.name)}</b>\nAll travel dates are in the past. Remove or update this trip.")
             continue
         if trip.name in best:
-            search, offer = best[trip.name]
+            search, offer, provider = best[trip.name]
+            if record and wants_booking_link(config, trip, offer, history):
+                try:
+                    link = provider.booking_link(trip, search, offer, config.currency)
+                    if link:
+                        offer.link, offer.exact_link = link, True
+                except Exception as exc:  # the search link is still there; just note it
+                    print(f"[warn] {trip.name}: couldn't get the booking link: {exc}", file=sys.stderr)
         else:
             todays = [s for t, s in planned if t is trip]
             if not todays:

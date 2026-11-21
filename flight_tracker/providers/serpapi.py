@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlencode
 
 import requests
 
@@ -51,6 +52,36 @@ class SerpApiProvider(Provider):
             ])
         return params
 
+    def _get(self, params: dict) -> dict:
+        resp = self.session.get(API_URL, params=params, timeout=60)
+        data = resp.json() if resp.content else {}
+        if resp.status_code != 200 or "error" in data:
+            raise RuntimeError(f"SerpApi error ({resp.status_code}): {data.get('error') or resp.text[:200]}")
+        return data
+
+    def booking_link(self, trip: Trip, search: Search, offer: Offer, currency: str) -> str | None:
+        """Follow Google Flights' steps to the booking page for this exact itinerary.
+
+        One-way: 1 extra search. Round trip: 2 (pick the return flight, then booking).
+        Multi-city: one per later flight, plus 1 for booking.
+        """
+        params = self.build_params(trip, search, currency)
+        tokens = offer.tokens
+        hops = len(trip.legs) - 1 if trip.legs else (1 if search.ret else 0)
+        for _ in range(hops):
+            if not tokens.get("departure_token"):
+                return None
+            data = self._get({**params, "departure_token": tokens["departure_token"]})
+            choices = [o for o in parse_response(data, currency)
+                       if trip.max_stops is None or o.stops <= trip.max_stops]
+            if not choices:
+                return None
+            tokens = min(choices, key=lambda o: o.price).tokens
+        if not tokens.get("booking_token"):
+            return None
+        data = self._get({**params, "booking_token": tokens["booking_token"]})
+        return (data.get("search_metadata") or {}).get("google_flights_url")
+
     def search(self, trip: Trip, search: Search, currency: str) -> list[Offer]:
         resp = self.session.get(API_URL, params=self.build_params(trip, search, currency), timeout=60)
         data = resp.json() if resp.content else {}
@@ -60,7 +91,20 @@ class SerpApiProvider(Provider):
             if "hasn't returned any results" in str(msg):
                 return []
             raise RuntimeError(f"SerpApi error ({resp.status_code}): {msg}")
-        return parse_response(data, currency)
+        offers = parse_response(data, currency)
+        for o in offers:
+            o.link = o.link or search_url(trip, search)
+        return offers
+
+
+def search_url(trip: Trip, search: Search) -> str | None:
+    """Fallback Google Flights link from a plain-language query, if SerpApi gave none."""
+    if trip.legs:
+        return None
+    first = lambda codes: codes.split(",")[0]
+    q = f"Flights from {first(trip.origin)} to {first(trip.destination)} on {search.depart.isoformat()}"
+    q += f" through {search.ret.isoformat()}" if search.ret else " one way"
+    return "https://www.google.com/travel/flights?" + urlencode({"q": q})
 
 
 def parse_response(data: dict, currency: str) -> list[Offer]:
@@ -88,6 +132,7 @@ def parse_response(data: dict, currency: str) -> list[Offer]:
                 source=SerpApiProvider.name,
                 link=link,
                 price_level=price_level,
+                tokens={k: group[k] for k in ("departure_token", "booking_token") if group.get(k)},
             )
         )
     return offers

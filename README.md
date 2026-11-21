@@ -64,6 +64,11 @@ SERPAPI_KEY=... python -m flight_tracker.main --dry-run   # real prices, prints 
 python -m pytest -q
 ```
 
+## Booking links
+Every alert links to Google Flights with your route, the cheapest dates, travelers and cabin already filled in, so you don't search again.
+
+On a good day (a new lowest price, or below your `target_price`), the tracker goes one step further and links to the **booking page for that exact itinerary**, the one with "Book with ..." buttons. Getting that link costs extra searches: 1 for one-way, 2 for a round trip, and for multi-city one per flight after the first plus 1. Choose when it happens with `booking_link` in `trips.yaml`: `deals` (default), `always`, or `off`.
+
 ## Staying within the free search limit
 Each date combination costs one search: departure × return dates for a round trip, or one date per flight for multi-city. Flexible ranges on several flights multiply quickly, so keep them short. `max_searches_per_run: 3` keeps you inside SerpApi's 100 searches a month. If your plan has more combinations than that, the tracker checks a different set each day and cycles through all of them, and the message footer shows how many it covered. On a paid plan, raise `max_searches_per_run` to check every combination daily.
 
